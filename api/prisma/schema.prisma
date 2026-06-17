@@ -1,0 +1,148 @@
+// DevPulse — Prisma Schema
+// Run: npx prisma migrate dev --name init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Users ──────────────────────────────────────────────────────────────────────
+model User {
+  id           String   @id @default(uuid())
+  githubId     String   @unique @map("github_id")
+  email        String   @unique
+  username     String
+  avatarUrl    String?  @map("avatar_url")
+  accessToken  String   @map("access_token")  // encrypt before storing
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  repos       Repo[]
+  teamMembers TeamMember[]
+  mlScores    MlScore[]
+  ownedTeams  Team[]   @relation("TeamOwner")
+
+  @@map("users")
+}
+
+// ── Teams ──────────────────────────────────────────────────────────────────────
+model Team {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  ownerId   String   @map("owner_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  owner   User         @relation("TeamOwner", fields: [ownerId], references: [id])
+  members TeamMember[]
+
+  @@map("teams")
+}
+
+model TeamMember {
+  id       String   @id @default(uuid())
+  teamId   String   @map("team_id")
+  userId   String   @map("user_id")
+  role     String   @default("member")   // "owner" | "admin" | "member"
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+  @@map("team_members")
+}
+
+// ── Repos ──────────────────────────────────────────────────────────────────────
+model Repo {
+  id            String    @id @default(uuid())
+  githubRepoId  String    @unique @map("github_repo_id")
+  ownerId       String    @map("owner_id")
+  fullName      String    @map("full_name")       // "org/repo-name"
+  defaultBranch String    @default("main") @map("default_branch")
+  isPrivate     Boolean   @default(false) @map("is_private")
+  lastSyncedAt  DateTime? @map("last_synced_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  owner        User          @relation(fields: [ownerId], references: [id])
+  commits      Commit[]
+  pullRequests PullRequest[]
+  mlScores     MlScore[]
+
+  @@map("repos")
+}
+
+// ── Commits ────────────────────────────────────────────────────────────────────
+model Commit {
+  id             String   @id @default(uuid())
+  repoId         String   @map("repo_id")
+  sha            String   @unique
+  authorGithubId String   @map("author_github_id")
+  message        String
+  additions      Int      @default(0)
+  deletions      Int      @default(0)
+  committedAt    DateTime @map("committed_at")
+
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  // Index for time-range analytics queries
+  @@index([repoId, committedAt])
+  @@index([authorGithubId, committedAt])
+  @@map("commits")
+}
+
+// ── Pull Requests ──────────────────────────────────────────────────────────────
+model PullRequest {
+  id             String    @id @default(uuid())
+  repoId         String    @map("repo_id")
+  githubPrNumber Int       @map("github_pr_number")
+  title          String
+  state          String    // "open" | "closed" | "merged"
+  authorGithubId String    @map("author_github_id")
+  openedAt       DateTime  @map("opened_at")
+  mergedAt       DateTime? @map("merged_at")
+  closedAt       DateTime? @map("closed_at")
+
+  repo    Repo       @relation(fields: [repoId], references: [id], onDelete: Cascade)
+  reviews PrReview[]
+
+  @@unique([repoId, githubPrNumber])
+  @@index([repoId, openedAt])
+  @@map("pull_requests")
+}
+
+// ── PR Reviews ─────────────────────────────────────────────────────────────────
+model PrReview {
+  id                 String   @id @default(uuid())
+  prId               String   @map("pr_id")
+  reviewerGithubId   String   @map("reviewer_github_id")
+  state              String   // "approved" | "changes_requested" | "commented"
+  timeToReviewMins   Int?     @map("time_to_review_mins")  // pre-computed on ingest
+  submittedAt        DateTime @map("submitted_at")
+
+  pullRequest PullRequest @relation(fields: [prId], references: [id], onDelete: Cascade)
+
+  @@map("pr_reviews")
+}
+
+// ── ML Scores ──────────────────────────────────────────────────────────────────
+model MlScore {
+  id              String   @id @default(uuid())
+  repoId          String   @map("repo_id")
+  userId          String   @map("user_id")
+  burnoutScore    Float    @map("burnout_score")   // 0.0 – 1.0
+  anomalyScore    Float    @map("anomaly_score")   // Isolation Forest decision score
+  featureSnapshot Json     @map("feature_snapshot") // raw features used for inference
+  modelVersion    String   @map("model_version")
+  scoredAt        DateTime @default(now()) @map("scored_at")
+
+  repo Repo @relation(fields: [repoId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, scoredAt])
+  @@index([repoId, scoredAt])
+  @@map("ml_scores")
+}

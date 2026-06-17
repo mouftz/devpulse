@@ -147,6 +147,7 @@ export async function authRoutes(app: FastifyInstance) {
           giteaUsername: true,
           email: true,
           avatarUrl: true,
+          accessToken: true,
         },
       })
 
@@ -154,7 +155,86 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.code(401).send({ error: 'User not found' })
       }
 
-      return { user }
+      return {
+        user: {
+          id: user.id,
+          githubId: user.githubId,
+          username: user.username,
+          giteaUsername: user.giteaUsername,
+          email: user.email,
+          avatarUrl: user.avatarUrl,
+          githubConnected: Boolean(user.accessToken),
+          giteaConnected: Boolean(user.giteaUsername),
+        },
+      }
+    } catch {
+      return reply.code(401).send({ error: 'Invalid session' })
+    }
+  })
+
+  app.post('/unlink/github', async (request, reply) => {
+    const token = request.cookies.devpulse_token
+    if (!token) {
+      return reply.code(401).send({ error: 'Not authenticated' })
+    }
+
+    try {
+      const payload = app.jwt.verify<{ sub: string }>(token)
+      await prisma.user.update({
+        where: { id: payload.sub },
+        data: { accessToken: '' },
+      })
+
+      return { provider: 'github', connected: false }
+    } catch {
+      return reply.code(401).send({ error: 'Invalid session' })
+    }
+  })
+
+  app.post('/unlink/gitea', async (request, reply) => {
+    const token = request.cookies.devpulse_token
+    if (!token) {
+      return reply.code(401).send({ error: 'Not authenticated' })
+    }
+
+    try {
+      const payload = app.jwt.verify<{ sub: string }>(token)
+      await prisma.user.update({
+        where: { id: payload.sub },
+        data: { giteaUsername: null },
+      })
+
+      return { provider: 'gitea', connected: false }
+    } catch {
+      return reply.code(401).send({ error: 'Invalid session' })
+    }
+  })
+
+  app.get('/system', async (request, reply) => {
+    const token = request.cookies.devpulse_token
+    if (!token) {
+      return reply.code(401).send({ error: 'Not authenticated' })
+    }
+
+    try {
+      app.jwt.verify<{ sub: string }>(token)
+
+      return {
+        api: {
+          status: 'ok',
+          nodeEnv: process.env.NODE_ENV ?? 'development',
+          host: process.env.HOST ?? '127.0.0.1',
+          port: Number(process.env.PORT ?? 3000),
+        },
+        sync: {
+          intervalSeconds: Number(process.env.SYNC_INTERVAL_SECONDS ?? 86400),
+          runOnStart: String(process.env.RUN_ON_START ?? 'true') === 'true',
+        },
+        providers: {
+          githubOauthConfigured: Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
+          giteaConfigured: Boolean(process.env.GITEA_BASE_URL && process.env.GITEA_TOKEN),
+        },
+      }
     } catch {
       return reply.code(401).send({ error: 'Invalid session' })
     }

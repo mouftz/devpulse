@@ -6,8 +6,9 @@ import {
   Flame,
   GitBranch,
   Github,
-  LogOut,
+  Link2Off,
   Loader2,
+  LogOut,
   Search,
   Settings2,
   RefreshCw,
@@ -15,6 +16,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
+import { AuthLanding } from './components/AuthLanding'
+import { WorkspaceSessionMenu } from './components/WorkspaceSessionMenu'
 
 const API_URL = 'http://localhost:3000'
 
@@ -25,6 +28,8 @@ type User = {
   giteaUsername: string | null
   email: string
   avatarUrl: string | null
+  githubConnected: boolean
+  giteaConnected: boolean
 }
 
 type Overview = {
@@ -57,6 +62,12 @@ type ChartBucket = {
   key: string
   label: string
   count: number
+}
+
+type LinePoint = {
+  key: string
+  label: string
+  value: number
 }
 
 type ActivitySummary = {
@@ -113,10 +124,38 @@ type SyncAllResult = {
   }>
 }
 
+type SystemStatus = {
+  api: {
+    status: string
+    nodeEnv: string
+    host: string
+    port: number
+  }
+  sync: {
+    intervalSeconds: number
+    runOnStart: boolean
+  }
+  providers: {
+    githubOauthConfigured: boolean
+    giteaConfigured: boolean
+  }
+}
+
+type DashboardInsights = {
+  windowDays: number
+  activeRepos: number
+  mergedPullRequests: number
+  averagePrCycleHours: number | null
+  averageReviewLatencyHours: number | null
+  staleRepos: number
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type RepoSort = 'recent' | 'commits' | 'unsynced'
 type RangeDays = 30 | 90 | 365
 type AnalyticsScope = 'mine' | 'all'
+type RepoProviderFilter = 'all' | 'github' | 'gitea'
+type RepoSyncFilter = 'all' | 'synced'
 
 const errorMessage = (error: unknown) => {
   if (!(error instanceof Error)) return 'Something went wrong.'
@@ -167,12 +206,16 @@ export function App() {
   const [user, setUser] = useState<User | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [activity, setActivity] = useState<ActivitySummary | null>(null)
+  const [insights, setInsights] = useState<DashboardInsights | null>(null)
   const [repoActivity, setRepoActivity] = useState<ActivitySummary | null>(null)
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
   const [repoSummary, setRepoSummary] = useState<RepoSummary | null>(null)
   const [prCycle, setPrCycle] = useState<PrCycleTrend | null>(null)
   const [reviewLatency, setReviewLatency] = useState<ReviewLatency | null>(null)
   const [repoSort, setRepoSort] = useState<RepoSort>('recent')
+  const [repoProviderFilter, setRepoProviderFilter] = useState<RepoProviderFilter>('all')
+  const [repoSyncFilter, setRepoSyncFilter] = useState<RepoSyncFilter>('all')
+  const [repoSearch, setRepoSearch] = useState('')
   const [rangeDays, setRangeDays] = useState<RangeDays>(365)
   const [analyticsScope, setAnalyticsScope] = useState<AnalyticsScope>('mine')
   const [state, setState] = useState<LoadState>('idle')
@@ -183,6 +226,10 @@ export function App() {
   const [managerRepos, setManagerRepos] = useState<ManagerRepo[]>([])
   const [managerLoading, setManagerLoading] = useState(false)
   const [managerQuery, setManagerQuery] = useState('')
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [unlinkingProvider, setUnlinkingProvider] = useState<'github' | 'gitea' | null>(null)
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   const load = async () => {
@@ -192,18 +239,21 @@ export function App() {
       setUser(me.user)
 
       await Promise.all([api('/github/repos'), api('/gitea/repos').catch(() => null)])
-      const [nextOverview, nextActivity] = await Promise.all([
+      const [nextOverview, nextActivity, nextInsights] = await Promise.all([
         api<Overview>(`/github/overview?scope=${analyticsScope}`),
         api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
+        api<DashboardInsights>(`/github/insights?days=${rangeDays}&scope=${analyticsScope}`),
       ])
       setOverview(nextOverview)
       setActivity(nextActivity)
+      setInsights(nextInsights)
       setSelectedRepoId((current) => current ?? nextOverview.repos.find((repo) => repo.lastSyncedAt)?.id ?? null)
       setState('ready')
     } catch {
       setUser(null)
       setOverview(null)
       setActivity(null)
+      setInsights(null)
       setRepoActivity(null)
       setPrCycle(null)
       setReviewLatency(null)
@@ -222,7 +272,14 @@ export function App() {
   }, [overview])
 
   const sortedRepos = useMemo(() => {
-    const repos = [...(overview?.repos ?? [])]
+    const query = repoSearch.trim().toLowerCase()
+    const repos = [...(overview?.repos ?? [])].filter((repo) => {
+      const matchesProvider = repoProviderFilter === 'all' || repo.provider === repoProviderFilter
+      const matchesSync =
+        repoSyncFilter === 'all' || Boolean(repo.lastSyncedAt)
+      const matchesSearch = !query || repo.fullName.toLowerCase().includes(query)
+      return matchesProvider && matchesSync && matchesSearch
+    })
     if (repoSort === 'commits') {
       return repos.sort((a, b) => b.commits - a.commits)
     }
@@ -239,7 +296,7 @@ export function App() {
       if (!b.lastSyncedAt) return -1
       return new Date(b.lastSyncedAt).getTime() - new Date(a.lastSyncedAt).getTime()
     })
-  }, [overview, repoSort])
+  }, [overview, repoProviderFilter, repoSearch, repoSort, repoSyncFilter])
 
   const selectedRepo = useMemo(() => {
     return overview?.repos.find((repo) => repo.id === selectedRepoId) ?? null
@@ -292,12 +349,14 @@ export function App() {
         api<SyncAllResult>('/github/repos/sync-all').catch(failedSyncResult),
         api<SyncAllResult>('/gitea/repos/sync-all').catch(failedSyncResult),
       ])
-      const [nextOverview, nextActivity] = await Promise.all([
+      const [nextOverview, nextActivity, nextInsights] = await Promise.all([
         api<Overview>(`/github/overview?scope=${analyticsScope}`),
         api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
+        api<DashboardInsights>(`/github/insights?days=${rangeDays}&scope=${analyticsScope}`),
       ])
       setOverview(nextOverview)
       setActivity(nextActivity)
+      setInsights(nextInsights)
       const synced = githubResult.synced + giteaResult.synced
       const failed = githubResult.failed + giteaResult.failed
       const failures = [...syncFailures('github', githubResult), ...syncFailures('gitea', giteaResult)]
@@ -319,10 +378,11 @@ export function App() {
     setNotice(null)
     try {
       await api(`/${repo?.provider ?? 'github'}/repos/${repoId}/sync`, { method: 'POST' })
-      const [nextOverview, nextActivity, nextRepoActivity, nextSummary, nextPrCycle, nextReviewLatency] =
+      const [nextOverview, nextActivity, nextInsights, nextRepoActivity, nextSummary, nextPrCycle, nextReviewLatency] =
         await Promise.all([
           api<Overview>(`/github/overview?scope=${analyticsScope}`),
           api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
+          api<DashboardInsights>(`/github/insights?days=${rangeDays}&scope=${analyticsScope}`),
           api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=${rangeDays}&scope=${analyticsScope}`),
           api<RepoSummary>(`/github/repos/${repoId}/summary?scope=${analyticsScope}`),
           api<PrCycleTrend>(`/github/repos/${repoId}/pr-cycle?days=${rangeDays}&scope=${analyticsScope}`),
@@ -330,6 +390,7 @@ export function App() {
         ])
       setOverview(nextOverview)
       setActivity(nextActivity)
+      setInsights(nextInsights)
       setRepoActivity(nextRepoActivity)
       setRepoSummary(nextSummary)
       setPrCycle(nextPrCycle)
@@ -401,6 +462,33 @@ export function App() {
     setManagerQuery('')
   }
 
+  const openSettings = () => {
+    setAccountMenuOpen(false)
+    setSettingsOpen(true)
+    void api<SystemStatus>('/auth/system')
+      .then(setSystemStatus)
+      .catch(() => setSystemStatus(null))
+  }
+
+  const closeSettings = () => {
+    setSettingsOpen(false)
+  }
+
+  const unlinkProvider = async (provider: 'github' | 'gitea') => {
+    setUnlinkingProvider(provider)
+    setNotice(null)
+    try {
+      await api(`/auth/unlink/${provider}`, { method: 'POST' })
+      const me = await api<{ user: User }>('/auth/me')
+      setUser(me.user)
+      setNotice(`${provider} disconnected.`)
+    } catch (error) {
+      setNotice(`Could not disconnect ${provider}: ${errorMessage(error)}`)
+    } finally {
+      setUnlinkingProvider(null)
+    }
+  }
+
   const logout = async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => null)
     setUser(null)
@@ -411,19 +499,34 @@ export function App() {
     setReviewLatency(null)
     setSelectedRepoId(null)
     setRepoSummary(null)
+    setAccountMenuOpen(false)
+    setSettingsOpen(false)
     setNotice(null)
   }
 
   const totals = overview?.totals ?? { repos: 0, syncedRepos: 0, commits: 0, pullRequests: 0 }
+  const insightSummary = insights ?? {
+    windowDays: rangeDays,
+    activeRepos: 0,
+    mergedPullRequests: 0,
+    averagePrCycleHours: null,
+    averageReviewLatencyHours: null,
+    staleRepos: 0,
+  }
   const rangeLabel = rangeDays === 365 ? 'the last year' : `the last ${rangeDays} days`
   const scopeLabel = analyticsScope === 'mine' ? 'your activity' : 'all contributors'
+  const isAuthenticated = Boolean(user)
+
+  if (!isAuthenticated) {
+    return <AuthLanding onConnectGitHub={connectGitHub} />
+  }
 
   return (
     <main className="app-shell">
-      <section className="hero">
+      <section className="workspace-shell">
         <div className="aurora aurora-a" />
         <div className="aurora aurora-b" />
-        <nav className="topbar">
+        <nav className="topbar workspace-topbar">
           <div className="brand">
             <span className="brand-mark">
               <Activity size={18} />
@@ -431,48 +534,38 @@ export function App() {
             <span>DevPulse</span>
           </div>
           {user ? (
-            <div className="session-actions">
-              <div className="profile-chip">
-                {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <Github size={18} />}
-                <span>{user.username}</span>
-              </div>
-              <button className="icon-button" onClick={logout} title="Log out">
-                <LogOut size={18} />
-              </button>
-            </div>
-          ) : (
-            <button className="ghost-button" onClick={connectGitHub}>
-              <Github size={18} />
-              Connect GitHub
-            </button>
-          )}
+            <WorkspaceSessionMenu
+              accountMenuOpen={accountMenuOpen}
+              avatarUrl={user.avatarUrl}
+              onLogout={logout}
+              onOpenSettings={openSettings}
+              onToggle={() => setAccountMenuOpen((open) => !open)}
+              username={user.username}
+            />
+          ) : null}
         </nav>
 
-        <div className="hero-grid">
-          <div className="hero-copy">
-            <p className="eyebrow">Developer Analytics</p>
-            <h1>Engineering signal, pulled straight from your GitHub flow.</h1>
+        <div className="workspace-hero">
+          <div className="workspace-copy">
+            <p className="eyebrow">Workspace</p>
+            <h2>Engineering signal for {scopeLabel}</h2>
             <p className="hero-text">
-              Track repository activity, sync commits and pull requests, and turn raw engineering
-              work into clean operating metrics.
+              Track repository activity, sync commits and pull requests, and keep an eye on review
+              speed, cycle time, and sync health in one place.
             </p>
             <div className="hero-actions">
-              <button className="primary-button" onClick={user ? syncAll : connectGitHub} disabled={syncing}>
-                {syncing ? <Loader2 className="spin" size={18} /> : user ? <RefreshCw size={18} /> : <Github size={18} />}
-                {user ? 'Sync All Repos' : 'Connect GitHub'}
+              <button className="primary-button" onClick={syncAll} disabled={syncing}>
+                {syncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+                Sync All Repos
               </button>
-              {user ? (
-                <button className="secondary-button" onClick={() => void api('/gitea/repos').then(load)}>
-                  <GitBranch size={18} />
-                  Add Gitea
-                </button>
-              ) : null}
-              {user ? (
-                <button className="secondary-button" onClick={openManager}>
-                  <Settings2 size={18} />
-                  Manage Repos
-                </button>
-              ) : null}
+              <button className="secondary-button" onClick={() => void api('/gitea/repos').then(load)}>
+                <GitBranch size={18} />
+                Add Gitea
+              </button>
+              <button className="secondary-button" onClick={openManager}>
+                <Settings2 size={18} />
+                Manage Repos
+              </button>
               <button className="secondary-button" onClick={load}>
                 <RefreshCw size={18} />
                 Refresh
@@ -481,22 +574,14 @@ export function App() {
             {notice ? <p className="notice">{notice}</p> : null}
           </div>
 
-          <div className="glass-panel pulse-panel">
-            <div className="panel-heading">
-              <span>Live Pulse</span>
-              <ShieldCheck size={18} />
-            </div>
-            <div className="pulse-score">{totals.commits}</div>
-            <p>commits synced across {totals.syncedRepos} repositories</p>
-            <div className="pulse-bars">
-              <span style={{ height: '42%' }} />
-              <span style={{ height: '66%' }} />
-              <span style={{ height: '54%' }} />
-              <span style={{ height: '86%' }} />
-              <span style={{ height: '72%' }} />
-              <span style={{ height: '48%' }} />
-              <span style={{ height: '61%' }} />
-            </div>
+          <div className="glass-panel workspace-status-strip">
+            <StatusTile label="Live Pulse" value={String(totals.commits)} detail={`${totals.syncedRepos} repositories synced`} />
+            <StatusTile label="Active Repos" value={String(insightSummary.activeRepos)} detail={rangeLabel} />
+            <StatusTile
+              label="Sync Health"
+              value={insightSummary.staleRepos === 0 ? 'Healthy' : `${insightSummary.staleRepos} stale`}
+              detail="Repos not synced in 7 days"
+            />
           </div>
         </div>
       </section>
@@ -507,6 +592,23 @@ export function App() {
           <Metric title="Synced" value={totals.syncedRepos} icon={<CheckCircle2 size={20} />} />
           <Metric title="Commits" value={totals.commits} icon={<Activity size={20} />} />
           <Metric title="Pull Requests" value={totals.pullRequests} icon={<Flame size={20} />} />
+        </div>
+
+        <div className="metric-grid insight-metric-grid">
+          <Metric title="Active Repos" value={insightSummary.activeRepos} icon={<GitBranch size={20} />} detail={rangeLabel} />
+          <Metric title="Merged PRs" value={insightSummary.mergedPullRequests} icon={<CheckCircle2 size={20} />} detail={rangeLabel} />
+          <Metric
+            title="Avg PR Cycle"
+            value={insightSummary.averagePrCycleHours == null ? 'No data' : `${insightSummary.averagePrCycleHours.toFixed(1)}h`}
+            icon={<RefreshCw size={20} />}
+            detail={scopeLabel}
+          />
+          <Metric
+            title="First Review"
+            value={insightSummary.averageReviewLatencyHours == null ? 'No data' : `${insightSummary.averageReviewLatencyHours.toFixed(1)}h`}
+            icon={<ShieldCheck size={20} />}
+            detail={`${insightSummary.staleRepos} stale repos`}
+          />
         </div>
 
         <section className="glass-panel contribution-panel">
@@ -549,7 +651,7 @@ export function App() {
             <div className="section-title">
               <div>
                 <p className="eyebrow">Repository Index</p>
-                <h2>Synced GitHub repos</h2>
+                <h2>Synced repositories</h2>
               </div>
               <div className="repo-tools">
                 <div className="segmented-control" aria-label="Sort repositories">
@@ -566,6 +668,41 @@ export function App() {
                 <button className="icon-button" onClick={syncAll} disabled={!user || syncing} title="Sync all repos">
                   {syncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
                 </button>
+              </div>
+            </div>
+
+            <div className="repo-filter-bar">
+              <label className="manager-search repo-search">
+                <Search size={18} />
+                <input
+                  value={repoSearch}
+                  onChange={(event) => setRepoSearch(event.target.value)}
+                  placeholder="Search repositories"
+                />
+              </label>
+              <div className="filter-controls">
+                <div className="segmented-control compact-control repo-filter-control" aria-label="Filter by provider">
+                  {(['all', 'github', 'gitea'] as const).map((provider) => (
+                    <button
+                      className={repoProviderFilter === provider ? 'active' : ''}
+                      key={provider}
+                      onClick={() => setRepoProviderFilter(provider)}
+                    >
+                      {provider === 'all' ? 'All' : provider}
+                    </button>
+                  ))}
+                </div>
+                <div className="segmented-control compact-control repo-filter-control" aria-label="Filter by sync status">
+                  {(['all', 'synced'] as const).map((syncStatus) => (
+                    <button
+                      className={repoSyncFilter === syncStatus ? 'active' : ''}
+                      key={syncStatus}
+                      onClick={() => setRepoSyncFilter(syncStatus)}
+                    >
+                      {syncStatus === 'all' ? 'Any' : syncStatus}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -603,6 +740,9 @@ export function App() {
                     </div>
                   </button>
                 ))}
+                {!sortedRepos.length ? (
+                  <div className="empty-state small">No repositories match those filters.</div>
+                ) : null}
               </div>
             )}
           </section>
@@ -666,11 +806,9 @@ export function App() {
                 <strong>{repoSummary?.metrics.pullRequests ?? selectedRepo.pullRequests}</strong>
               </div>
               <div>
-                <span>Avg PR cycle</span>
+                <span>Merged PRs</span>
                 <strong>
-                  {repoSummary?.metrics.averagePrCycleHours == null
-                    ? 'No data'
-                    : `${repoSummary.metrics.averagePrCycleHours.toFixed(1)}h`}
+                  {repoSummary?.metrics.mergedPullRequests ?? 0}
                 </strong>
               </div>
             </div>
@@ -681,10 +819,11 @@ export function App() {
           {selectedRepo ? (
             <div className="mini-chart-block">
               <div>
-                <span className="subtle-label">{rangeDays === 365 ? 'Last year' : `Last ${rangeDays} days`}</span>
+                <span className="subtle-label">Commit trend</span>
                 <strong>{repoActivity?.total ?? 0} commits</strong>
+                <p>{rangeDays === 365 ? 'Across the last year' : `Across the last ${rangeDays} days`}</p>
               </div>
-              <MiniActivityChart days={repoActivity?.days ?? []} />
+              <RepoActivityChart days={repoActivity?.days ?? []} />
             </div>
           ) : null}
 
@@ -694,6 +833,16 @@ export function App() {
                 <span className="subtle-label">PR cycle trend</span>
                 <strong>{formatTrend(prCycle)}</strong>
                 <p>{formatTrendDetail(prCycle)}</p>
+                <div className="detail-stat-row">
+                  <StatPill
+                    label="Average"
+                    value={prCycle?.averageHours == null ? 'No data' : `${prCycle.averageHours.toFixed(1)}h`}
+                  />
+                  <StatPill
+                    label="Median"
+                    value={prCycle?.weeks.length ? `${median(prCycle.weeks.map((week) => week.averageHours)).toFixed(1)}h` : 'No data'}
+                  />
+                </div>
               </div>
               <PrCycleChart trend={prCycle} />
             </div>
@@ -705,6 +854,16 @@ export function App() {
                 <span className="subtle-label">Review latency</span>
                 <strong>{formatReviewLatency(reviewLatency)}</strong>
                 <p>{formatReviewLatencyDetail(reviewLatency)}</p>
+                <div className="detail-stat-row">
+                  <StatPill
+                    label="Reviewed PRs"
+                    value={reviewLatency?.reviewedPullRequests != null ? String(reviewLatency.reviewedPullRequests) : '0'}
+                  />
+                  <StatPill
+                    label="Median"
+                    value={reviewLatency?.weeks.length ? `${median(reviewLatency.weeks.map((week) => week.averageHours)).toFixed(1)}h` : 'No data'}
+                  />
+                </div>
               </div>
               <ReviewLatencyChart latency={reviewLatency} />
             </div>
@@ -774,6 +933,74 @@ export function App() {
           </section>
         </div>
       ) : null}
+
+      {settingsOpen && user ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeSettings}>
+          <section className="glass-panel settings-panel" role="dialog" aria-modal="true" aria-label="Settings" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="section-title">
+              <div>
+                <p className="eyebrow">Settings</p>
+                <h2>Account and connections</h2>
+              </div>
+              <button className="icon-button" onClick={closeSettings} title="Close settings">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="settings-account">
+              {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <Github size={24} />}
+              <div>
+                <strong>{user.username}</strong>
+                <span>{user.email}</span>
+              </div>
+            </div>
+
+            <div className="settings-list">
+              <ProviderSetting
+                connected={user.githubConnected}
+                detail={user.githubConnected ? `Connected as ${user.username}` : 'Disconnected. Reconnect with GitHub OAuth.'}
+                icon={<Github size={30} />}
+                isBusy={unlinkingProvider === 'github'}
+                name="GitHub"
+                onConnect={connectGitHub}
+                onUnlink={() => void unlinkProvider('github')}
+              />
+              <ProviderSetting
+                connected={user.giteaConnected}
+                detail={user.giteaConnected ? `Connected as ${user.giteaUsername}` : 'Disconnected. Gitea uses your local env token.'}
+                icon={<GitBranch size={20} />}
+                isBusy={unlinkingProvider === 'gitea'}
+                name="Gitea"
+                onConnect={() => void api('/gitea/repos').then(load).catch((error) => setNotice(`Could not connect gitea: ${errorMessage(error)}`))}
+                onUnlink={() => void unlinkProvider('gitea')}
+              />
+            </div>
+
+            <div className="settings-system">
+              <p className="eyebrow">Infrastructure</p>
+              {systemStatus ? (
+                <div className="settings-system-grid">
+                  <StatPill label="API" value={systemStatus.api.status.toUpperCase()} />
+                  <StatPill label="Mode" value={systemStatus.api.nodeEnv} />
+                  <StatPill label="Sync cadence" value={formatInterval(systemStatus.sync.intervalSeconds)} />
+                  <StatPill label="Run on start" value={systemStatus.sync.runOnStart ? 'Enabled' : 'Off'} />
+                  <StatPill label="GitHub OAuth" value={systemStatus.providers.githubOauthConfigured ? 'Ready' : 'Missing'} />
+                  <StatPill label="Gitea env" value={systemStatus.providers.giteaConfigured ? 'Ready' : 'Missing'} />
+                </div>
+              ) : (
+                <div className="empty-state small">System status is unavailable right now.</div>
+              )}
+            </div>
+
+            <div className="settings-footer">
+              <button className="secondary-button" onClick={logout}>
+                <LogOut size={18} />
+                Log out
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   )
 }
@@ -805,105 +1032,310 @@ const formatReviewLatencyDetail = (latency: ReviewLatency | null) => {
 
 function ReviewLatencyChart({ latency }: { latency: ReviewLatency | null }) {
   const weeks = latency?.weeks ?? []
-  const max = Math.max(...weeks.map((week) => week.averageHours), 1)
 
   if (!weeks.length) {
     return <div className="trend-empty">No weekly review latency data yet.</div>
   }
 
   return (
-    <div className="review-latency-chart" aria-label="Review latency by week">
-      {weeks.map((week) => (
-        <span
-          key={week.week}
-          style={{ height: `${Math.max(10, (week.averageHours / max) * 100)}%` }}
-          title={`${week.averageHours.toFixed(1)}h average, ${week.reviewedPrs} reviewed PRs`}
-        />
-      ))}
-    </div>
+    <TrendLineChart
+      points={weeks.map((week) => ({
+        key: week.week,
+        label: formatWeekLabel(week.week),
+        value: week.averageHours,
+      }))}
+      subtitle="First review response"
+      tone="amber"
+      tooltipLabel={(point) => `${point.value.toFixed(1)}h average · ${weeks.find((week) => week.week === point.key)?.reviewedPrs ?? 0} reviewed PRs`}
+    />
   )
 }
 
 function PrCycleChart({ trend }: { trend: PrCycleTrend | null }) {
   const weeks = trend?.weeks ?? []
-  const max = Math.max(...weeks.map((week) => week.averageHours), 1)
 
   if (!weeks.length) {
     return <div className="trend-empty">No weekly PR cycle data yet.</div>
   }
 
   return (
-    <div className="pr-cycle-chart" aria-label="PR cycle trend by week">
-      {weeks.map((week) => (
-        <span
-          key={week.week}
-          style={{ height: `${Math.max(10, (week.averageHours / max) * 100)}%` }}
-          title={`${week.averageHours.toFixed(1)}h average, ${week.mergedPrs} merged PRs`}
-        />
-      ))}
-    </div>
+    <TrendLineChart
+      points={weeks.map((week) => ({
+        key: week.week,
+        label: formatWeekLabel(week.week),
+        value: week.averageHours,
+      }))}
+      subtitle={trend?.trend === 'improving' ? 'Moving faster' : trend?.trend === 'slowing' ? 'Taking longer' : 'Holding steady'}
+      tone={trend?.trend === 'slowing' ? 'rose' : 'mint'}
+      tooltipLabel={(point) => `${point.value.toFixed(1)}h average · ${weeks.find((week) => week.week === point.key)?.mergedPrs ?? 0} merged PRs`}
+    />
   )
 }
 
-function MiniActivityChart({ days }: { days: ActivityDay[] }) {
-  const chartBuckets = useMemo(() => {
-    const sourceDays = days.length ? days : (() => {
-      const fallback: ActivityDay[] = []
-      const end = new Date()
-      const start = new Date(end)
-      start.setDate(start.getDate() - 29)
-      for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
-        fallback.push({ date: cursor.toISOString().slice(0, 10), count: 0 })
-      }
-      return fallback
-    })()
-
-    if (sourceDays.length <= 60) {
-      return sourceDays.map((day): ChartBucket => ({
-        key: day.date,
-        label: day.date,
-        count: day.count,
-      }))
-    }
-
-    const bucketSize = Math.ceil(sourceDays.length / 60)
-    const buckets: ChartBucket[] = []
-    for (let index = 0; index < sourceDays.length; index += bucketSize) {
-      const bucketDays = sourceDays.slice(index, index + bucketSize)
-      const first = bucketDays[0]
-      const last = bucketDays[bucketDays.length - 1]
-      buckets.push({
-        key: `${first.date}-${last.date}`,
-        label: first.date === last.date ? first.date : `${first.date} to ${last.date}`,
-        count: bucketDays.reduce((total, day) => total + day.count, 0),
-      })
-    }
-    return buckets
-  }, [days])
-
-  const max = Math.max(...chartBuckets.map((bucket) => bucket.count), 1)
+function RepoActivityChart({ days }: { days: ActivityDay[] }) {
+  const points = useMemo(() => bucketActivityDays(days), [days])
 
   return (
-    <div className="mini-chart" aria-label="Selected repo commits">
-      {chartBuckets.map((bucket) => (
-        <span
-          key={bucket.key}
-          style={{ height: `${Math.max(8, (bucket.count / max) * 100)}%` }}
-          title={`${bucket.count} commits, ${bucket.label}`}
-        />
-      ))}
-    </div>
+    <TrendLineChart
+      points={points}
+      subtitle="Commit volume"
+      tone="mint"
+      valueSuffix=""
+      tooltipLabel={(point) => `${point.value} commits · ${point.label}`}
+    />
   )
 }
 
-function Metric({ title, value, icon }: { title: string; value: number; icon: React.ReactNode }) {
+function Metric({
+  title,
+  value,
+  icon,
+  detail,
+}: {
+  title: string
+  value: number | string
+  icon: React.ReactNode
+  detail?: string
+}) {
   return (
     <div className="glass-panel metric-card">
       <div className="metric-icon">{icon}</div>
       <span>{title}</span>
       <strong>{value}</strong>
+      {detail ? <small>{detail}</small> : null}
     </div>
   )
+}
+
+function StatusTile({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="status-tile">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </div>
+  )
+}
+
+function ProviderSetting({
+  connected,
+  detail,
+  icon,
+  isBusy,
+  name,
+  onConnect,
+  onUnlink,
+}: {
+  connected: boolean
+  detail: string
+  icon: React.ReactNode
+  isBusy: boolean
+  name: string
+  onConnect: () => void
+  onUnlink: () => void
+}) {
+  return (
+    <div className="settings-row">
+      <div className="settings-provider">
+        <span className="settings-icon">{icon}</span>
+        <div>
+          <strong>{name}</strong>
+          <span>{detail}</span>
+        </div>
+      </div>
+      <div className="settings-row-actions">
+        <span className={`connection-pill ${connected ? 'connected' : 'disconnected'}`}>
+          {connected ? 'Connected' : 'Disconnected'}
+        </span>
+        {connected ? (
+          <button className="danger-button compact-button" onClick={onUnlink} disabled={isBusy}>
+            {isBusy ? <Loader2 className="spin" size={16} /> : <Link2Off size={16} />}
+            Unlink
+          </button>
+        ) : (
+          <button className="secondary-button compact-button" onClick={onConnect}>
+            Connect
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function StatPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="detail-stat-pill">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
+function TrendLineChart({
+  points,
+  subtitle,
+  tone,
+  tooltipLabel,
+  valueSuffix = 'h',
+}: {
+  points: LinePoint[]
+  subtitle: string
+  tone: 'mint' | 'amber' | 'rose'
+  tooltipLabel: (point: LinePoint) => string
+  valueSuffix?: string
+}) {
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null)
+  const width = 560
+  const height = 116
+  const paddingX = 12
+  const paddingTop = 12
+  const paddingBottom = 18
+  const max = Math.max(...points.map((point) => point.value), 1)
+  const min = Math.min(...points.map((point) => point.value), 0)
+  const range = Math.max(max - min, 1)
+  const step = points.length > 1 ? (width - paddingX * 2) / (points.length - 1) : 0
+
+  const coords = points.map((point, index) => {
+    const x = paddingX + index * step
+    const y =
+      height -
+      paddingBottom -
+      ((point.value - min) / range) * (height - paddingTop - paddingBottom)
+    return { ...point, x, y }
+  })
+
+  const line = coords.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+  const area = `${line} L ${coords[coords.length - 1]?.x ?? paddingX} ${height - paddingBottom} L ${coords[0]?.x ?? paddingX} ${height - paddingBottom} Z`
+  const tickIndexes = Array.from(new Set([0, Math.floor((coords.length - 1) / 2), coords.length - 1])).filter((index) => index >= 0)
+  const hoveredPoint = hoveredKey ? coords.find((point) => point.key === hoveredKey) ?? null : null
+  const yTicks = [
+    { label: `${max.toFixed(max >= 10 ? 0 : 1)}${valueSuffix}`, position: paddingTop },
+    { label: `${(min + range / 2).toFixed(range / 2 >= 10 ? 0 : 1)}${valueSuffix}`, position: (height - paddingBottom + paddingTop) / 2 },
+    { label: `${min.toFixed(min >= 10 ? 0 : 1)}${valueSuffix}`, position: height - paddingBottom },
+  ]
+
+  const updateHoveredPoint = (clientX: number, currentTarget: EventTarget & SVGSVGElement) => {
+    const bounds = currentTarget.getBoundingClientRect()
+    const relativeX = ((clientX - bounds.left) / bounds.width) * width
+    const nextPoint = coords.reduce((closest, point) =>
+      Math.abs(point.x - relativeX) < Math.abs(closest.x - relativeX) ? point : closest,
+    )
+    setHoveredKey(nextPoint.key)
+  }
+
+  return (
+    <div className={`trend-chart-shell tone-${tone}`}>
+      <div className="trend-chart-header">
+        <span>{subtitle}</span>
+        <span>{max.toFixed(max >= 10 ? 0 : 1)}{valueSuffix} max</span>
+      </div>
+      <div className="trend-chart-layout">
+        <div className="trend-y-axis" aria-hidden="true">
+          {yTicks.map((tick) => (
+            <span key={`${tick.label}-${tick.position}`} style={{ top: `${(tick.position / height) * 100}%` }}>
+              {tick.label}
+            </span>
+          ))}
+        </div>
+        <div className="trend-chart-main">
+          {hoveredPoint ? (
+            <div className="trend-hover-card">
+              <strong>{hoveredPoint.label}</strong>
+              <span>{tooltipLabel(hoveredPoint)}</span>
+            </div>
+          ) : (
+            <div className="trend-hover-card muted">Hover a point for detail.</div>
+          )}
+          <svg
+            className="trend-line-chart"
+            viewBox={`0 0 ${width} ${height}`}
+            aria-label={subtitle}
+            onMouseMove={(event) => updateHoveredPoint(event.clientX, event.currentTarget)}
+            onMouseLeave={() => setHoveredKey(null)}
+          >
+            <path className="trend-grid-line" d={`M ${paddingX} ${height - paddingBottom} H ${width - paddingX}`} />
+            <path className="trend-grid-line faint" d={`M ${paddingX} ${(height - paddingBottom + paddingTop) / 2} H ${width - paddingX}`} />
+            <path className="trend-area" d={area} />
+            <path className="trend-line" d={line} />
+            {coords.map((point) => (
+              <circle
+                className={`trend-point ${hoveredKey === point.key ? 'active' : ''}`}
+                cx={point.x}
+                cy={point.y}
+                key={point.key}
+                r={hoveredKey === point.key ? '5' : '3.5'}
+              />
+            ))}
+          </svg>
+        </div>
+      </div>
+      <div className="trend-chart-labels">
+        {tickIndexes.map((index) => (
+          <span key={coords[index]?.key}>{coords[index]?.label}</span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+const median = (values: number[]) => {
+  if (!values.length) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  const midpoint = Math.floor(sorted.length / 2)
+  if (sorted.length % 2 === 0) {
+    return (sorted[midpoint - 1] + sorted[midpoint]) / 2
+  }
+  return sorted[midpoint]
+}
+
+const formatWeekLabel = (value: string) => {
+  const date = new Date(`${value}T00:00:00`)
+  if (Number.isNaN(date.getTime())) return value
+  return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(date)
+}
+
+const bucketActivityDays = (days: ActivityDay[]) => {
+  const sourceDays = days.length
+    ? days
+    : (() => {
+        const fallback: ActivityDay[] = []
+        const end = new Date()
+        const start = new Date(end)
+        start.setDate(start.getDate() - 29)
+        for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+          fallback.push({ date: cursor.toISOString().slice(0, 10), count: 0 })
+        }
+        return fallback
+      })()
+
+  if (sourceDays.length <= 24) {
+    return sourceDays.map((day) => ({
+      key: day.date,
+      label: formatWeekLabel(day.date),
+      value: day.count,
+    }))
+  }
+
+  const bucketSize = Math.ceil(sourceDays.length / 24)
+  const buckets: LinePoint[] = []
+  for (let index = 0; index < sourceDays.length; index += bucketSize) {
+    const bucketDays = sourceDays.slice(index, index + bucketSize)
+    const first = bucketDays[0]
+    const last = bucketDays[bucketDays.length - 1]
+    buckets.push({
+      key: `${first.date}-${last.date}`,
+      label: first.date === last.date ? formatWeekLabel(first.date) : `${formatWeekLabel(first.date)} - ${formatWeekLabel(last.date)}`,
+      value: bucketDays.reduce((total, day) => total + day.count, 0),
+    })
+  }
+  return buckets
+}
+
+const formatInterval = (seconds: number) => {
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`
+  const days = seconds / 86400
+  return Number.isInteger(days) ? `${days}d` : `${days.toFixed(1)}d`
 }
 
 function ContributionGraph({ days }: { days: ActivityDay[] }) {

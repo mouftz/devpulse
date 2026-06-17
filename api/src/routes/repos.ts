@@ -713,6 +713,93 @@ export async function repoRoutes(app: FastifyInstance) {
     }
   })
 
+  app.get<{ Querystring: { days?: string; scope?: string } }>('/insights', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+    const scope = analyticsScope(request.query.scope)
+    const dayCount = Math.min(Math.max(Number(request.query.days ?? 90), 1), 365)
+    const end = new Date()
+    const start = new Date(end)
+    start.setUTCDate(start.getUTCDate() - (dayCount - 1))
+    start.setUTCHours(0, 0, 0, 0)
+
+    const visibleRepos = await prisma.repo.findMany({
+      where: { ownerId: user.id, isHidden: false },
+      select: { id: true, lastSyncedAt: true },
+    })
+
+    const [commits, mergedPullRequests, reviewedPullRequests] = await Promise.all([
+      prisma.commit.findMany({
+        where: {
+          repo: { ownerId: user.id, isHidden: false },
+          ...authorFilter(scope, user),
+          committedAt: { gte: start, lte: end },
+        },
+        select: { repoId: true },
+      }),
+      prisma.pullRequest.findMany({
+        where: {
+          repo: { ownerId: user.id, isHidden: false },
+          ...authorFilter(scope, user),
+          mergedAt: { not: null, gte: start, lte: end },
+        },
+        select: { openedAt: true, mergedAt: true },
+      }),
+      prisma.pullRequest.findMany({
+        where: {
+          repo: { ownerId: user.id, isHidden: false },
+          ...authorFilter(scope, user),
+          openedAt: { gte: start, lte: end },
+          reviews: { some: { timeToReviewMins: { not: null } } },
+        },
+        select: {
+          reviews: {
+            where: { timeToReviewMins: { not: null } },
+            orderBy: { submittedAt: 'asc' },
+            select: { timeToReviewMins: true },
+          },
+        },
+      }),
+    ])
+
+    const activeRepos = new Set(commits.map((commit) => commit.repoId)).size
+    const averagePrCycleHours =
+      mergedPullRequests.length > 0
+        ? mergedPullRequests.reduce((total, pullRequest) => {
+            const opened = pullRequest.openedAt.getTime()
+            const merged = pullRequest.mergedAt?.getTime() ?? opened
+            return total + (merged - opened) / 1000 / 60 / 60
+          }, 0) / mergedPullRequests.length
+        : null
+
+    const firstReviewHours = reviewedPullRequests
+      .map((pullRequest) => pullRequest.reviews[0]?.timeToReviewMins ?? null)
+      .filter((value): value is number => value != null)
+      .map((value) => value / 60)
+
+    const averageReviewLatencyHours =
+      firstReviewHours.length > 0
+        ? firstReviewHours.reduce((total, value) => total + value, 0) / firstReviewHours.length
+        : null
+
+    const staleRepos = visibleRepos.filter((repo) => {
+      if (!repo.lastSyncedAt) return true
+      const ageMs = end.getTime() - repo.lastSyncedAt.getTime()
+      return ageMs > 1000 * 60 * 60 * 24 * 7
+    }).length
+
+    return {
+      windowDays: dayCount,
+      activeRepos,
+      mergedPullRequests: mergedPullRequests.length,
+      averagePrCycleHours,
+      averageReviewLatencyHours,
+      staleRepos,
+    }
+  })
+
   app.get<{ Querystring: { scope?: string } }>('/repos/manage', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {

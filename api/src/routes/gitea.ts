@@ -469,6 +469,30 @@ export async function giteaRoutes(app: FastifyInstance) {
     return { queued: repos.length, queueDepth: await getQueueDepth() }
   })
 
+  app.post<{ Params: { repoId: string } }>('/repos/:repoId/sync/background', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    const repo = await prisma.repo.findFirst({
+      where: {
+        id: request.params.repoId,
+        ownerId: user.id,
+        githubRepoId: { startsWith: 'gitea:' },
+        isHidden: false,
+      },
+      select: { id: true, githubRepoId: true, ownerId: true },
+    })
+
+    if (!repo) {
+      return reply.code(404).send({ error: 'Gitea repo not found' })
+    }
+
+    await enqueueRepos([repo], 'manual')
+    return { queued: 1, queueDepth: await getQueueDepth() }
+  })
+
   app.delete<{ Params: { repoId: string } }>('/repos/:repoId', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {

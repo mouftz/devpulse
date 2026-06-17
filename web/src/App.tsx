@@ -161,7 +161,7 @@ type RepoSort = 'recent' | 'commits' | 'unsynced'
 type RangeDays = 30 | 90 | 365
 type AnalyticsScope = 'mine' | 'all'
 type RepoProviderFilter = 'all' | 'github' | 'gitea'
-type RepoSyncFilter = 'all' | 'synced'
+type RepoSyncFilter = 'all' | 'healthy' | 'queued' | 'syncing' | 'failed' | 'unsynced'
 
 const errorMessage = (error: unknown) => {
   if (!(error instanceof Error)) return 'Something went wrong.'
@@ -206,6 +206,25 @@ const formatDate = (value: string | null) => {
     hour: 'numeric',
     minute: '2-digit',
   }).format(new Date(value))
+}
+
+const formatSyncDetail = (
+  repo: Overview['repos'][number] | null,
+  fallbackLastSyncedAt?: string | null,
+) => {
+  if (!repo) return 'No sync history yet.'
+  if (repo.syncStatus === 'failed') return repo.lastSyncError ?? 'Last sync attempt failed.'
+  if (repo.syncStatus === 'queued') return 'Queued for background sync.'
+  if (repo.syncStatus === 'syncing') return 'Background sync is running now.'
+
+  const finishedAt = repo.lastSyncFinishedAt ?? fallbackLastSyncedAt ?? repo.lastSyncedAt
+  return finishedAt ? `Finished ${formatDate(finishedAt)}.` : 'No sync history yet.'
+}
+
+const formatSyncTimestamp = (repo: Overview['repos'][number]) => {
+  if (repo.lastSyncFinishedAt) return `Finished ${formatDate(repo.lastSyncFinishedAt)}`
+  if (repo.lastSyncedAt) return `Last synced ${formatDate(repo.lastSyncedAt)}`
+  return 'No completed sync yet'
 }
 
 export function App() {
@@ -287,7 +306,11 @@ export function App() {
     const repos = [...(overview?.repos ?? [])].filter((repo) => {
       const matchesProvider = repoProviderFilter === 'all' || repo.provider === repoProviderFilter
       const matchesSync =
-        repoSyncFilter === 'all' || Boolean(repo.lastSyncedAt)
+        repoSyncFilter === 'all'
+          ? true
+          : repoSyncFilter === 'unsynced'
+            ? !repo.lastSyncedAt
+            : repo.syncStatus === repoSyncFilter
       const matchesSearch = !query || repo.fullName.toLowerCase().includes(query)
       return matchesProvider && matchesSync && matchesSearch
     })
@@ -384,21 +407,20 @@ export function App() {
     setSyncingRepoId(repoId)
     setNotice(null)
     try {
-      await api(`/${repo?.provider ?? 'github'}/repos/${repoId}/sync`, { method: 'POST' })
-      const [{ nextOverview }, nextRepoActivity, nextSummary, nextPrCycle, nextReviewLatency] =
-        await Promise.all([
-          refreshDashboard(),
-          api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=${rangeDays}&scope=${analyticsScope}`),
-          api<RepoSummary>(`/github/repos/${repoId}/summary?scope=${analyticsScope}`),
-          api<PrCycleTrend>(`/github/repos/${repoId}/pr-cycle?days=${rangeDays}&scope=${analyticsScope}`),
-          api<ReviewLatency>(`/github/repos/${repoId}/review-latency?days=${rangeDays}&scope=${analyticsScope}`),
-        ])
-      setRepoActivity(nextRepoActivity)
-      setRepoSummary(nextSummary)
-      setPrCycle(nextPrCycle)
-      setReviewLatency(nextReviewLatency)
+      const result = await api<{ queued: number; queueDepth: number }>(
+        `/${repo?.provider ?? 'github'}/repos/${repoId}/sync/background`,
+        { method: 'POST' },
+      )
+      await refreshDashboard()
+      if (managerOpen) {
+        await loadManagerRepos()
+      }
       setSelectedRepoId(repoId)
-      setNotice(`Synced ${nextSummary.repo.fullName}.`)
+      setNotice(
+        result.queued > 0
+          ? `Queued ${repo?.fullName ?? 'repository'} for background sync. ${result.queueDepth} jobs waiting.`
+          : `No sync job queued for ${repo?.fullName ?? 'repository'}.`,
+      )
     } catch (error) {
       setNotice(`Could not sync ${repo?.provider ?? 'repository'} ${repo?.fullName ?? repoId}: ${errorMessage(error)}`)
     } finally {
@@ -520,6 +542,9 @@ export function App() {
   const queueActive =
     insightSummary.queueDepth > 0 ||
     (overview?.repos ?? []).some((repo) => repo.syncStatus === 'queued' || repo.syncStatus === 'syncing')
+  const activeSyncCount = (overview?.repos ?? []).filter(
+    (repo) => repo.syncStatus === 'queued' || repo.syncStatus === 'syncing',
+  ).length
 
   useEffect(() => {
     if (!isAuthenticated || !queueActive) return
@@ -553,16 +578,24 @@ export function App() {
             </span>
             <span>DevPulse</span>
           </div>
-          {user ? (
-            <WorkspaceSessionMenu
-              accountMenuOpen={accountMenuOpen}
-              avatarUrl={user.avatarUrl}
-              onLogout={logout}
-              onOpenSettings={openSettings}
-              onToggle={() => setAccountMenuOpen((open) => !open)}
-              username={user.username}
-            />
-          ) : null}
+          <div className="topbar-actions">
+            {queueActive ? (
+              <div className="topbar-sync-indicator">
+                <Loader2 className="spin" size={14} />
+                <span>{activeSyncCount > 0 ? `${activeSyncCount} syncing` : `${insightSummary.queueDepth} queued`}</span>
+              </div>
+            ) : null}
+            {user ? (
+              <WorkspaceSessionMenu
+                accountMenuOpen={accountMenuOpen}
+                avatarUrl={user.avatarUrl}
+                onLogout={logout}
+                onOpenSettings={openSettings}
+                onToggle={() => setAccountMenuOpen((open) => !open)}
+                username={user.username}
+              />
+            ) : null}
+          </div>
         </nav>
 
         <div className="workspace-hero">
@@ -709,7 +742,7 @@ export function App() {
                   ))}
                 </div>
                 <div className="segmented-control compact-control repo-filter-control" aria-label="Filter by sync status">
-                  {(['all', 'synced'] as const).map((syncStatus) => (
+                  {(['all', 'healthy', 'queued', 'syncing', 'failed', 'unsynced'] as const).map((syncStatus) => (
                     <button
                       className={repoSyncFilter === syncStatus ? 'active' : ''}
                       key={syncStatus}
@@ -739,6 +772,7 @@ export function App() {
                       <span>{repo.provider} · {formatDate(repo.lastSyncedAt)}</span>
                       <div className="repo-row-meta">
                         <SyncStatusPill status={repo.syncStatus} />
+                        <small>{formatSyncTimestamp(repo)}</small>
                         {repo.lastSyncError ? <em>{repo.lastSyncError}</em> : null}
                       </div>
                     </div>
@@ -812,26 +846,36 @@ export function App() {
           </div>
 
           {selectedRepo ? (
-            <div className="detail-grid">
-              <div>
-                <span>Last synced</span>
-                <strong>{formatDate(repoSummary?.repo.lastSyncedAt ?? selectedRepo.lastSyncedAt)}</strong>
+            <>
+              <div className="detail-sync-strip">
+                <div className="detail-sync-copy">
+                  <span className="subtle-label">Sync status</span>
+                  <strong>{getSyncStatusLabel(selectedRepo.syncStatus)}</strong>
+                  <p>{formatSyncDetail(selectedRepo, repoSummary?.repo.lastSyncedAt)}</p>
+                </div>
+                <SyncStatusPill status={selectedRepo.syncStatus} />
               </div>
-              <div>
-                <span>Commits</span>
-                <strong>{repoSummary?.metrics.commits ?? selectedRepo.commits}</strong>
+              <div className="detail-grid">
+                <div>
+                  <span>Last synced</span>
+                  <strong>{formatDate(repoSummary?.repo.lastSyncedAt ?? selectedRepo.lastSyncedAt)}</strong>
+                </div>
+                <div>
+                  <span>Commits</span>
+                  <strong>{repoSummary?.metrics.commits ?? selectedRepo.commits}</strong>
+                </div>
+                <div>
+                  <span>Pull requests</span>
+                  <strong>{repoSummary?.metrics.pullRequests ?? selectedRepo.pullRequests}</strong>
+                </div>
+                <div>
+                  <span>Merged PRs</span>
+                  <strong>
+                    {repoSummary?.metrics.mergedPullRequests ?? 0}
+                  </strong>
+                </div>
               </div>
-              <div>
-                <span>Pull requests</span>
-                <strong>{repoSummary?.metrics.pullRequests ?? selectedRepo.pullRequests}</strong>
-              </div>
-              <div>
-                <span>Merged PRs</span>
-                <strong>
-                  {repoSummary?.metrics.mergedPullRequests ?? 0}
-                </strong>
-              </div>
-            </div>
+            </>
           ) : (
             <div className="empty-state small">Click a repo row to inspect it.</div>
           )}
@@ -935,6 +979,7 @@ export function App() {
                       <span>{repo.provider} · {formatDate(repo.lastSyncedAt)} · {repo.commits} commits · {repo.pullRequests} PRs</span>
                       <div className="repo-row-meta manager-meta">
                         <SyncStatusPill status={repo.syncStatus} />
+                        <small>{formatSyncTimestamp(repo)}</small>
                         {repo.lastSyncError ? <em>{repo.lastSyncError}</em> : null}
                       </div>
                     </div>

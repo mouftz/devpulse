@@ -523,6 +523,30 @@ export async function repoRoutes(app: FastifyInstance) {
     return { queued: repos.length, queueDepth: await getQueueDepth() }
   })
 
+  app.post<{ Params: { repoId: string } }>('/repos/:repoId/sync/background', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    const repo = await prisma.repo.findFirst({
+      where: {
+        id: request.params.repoId,
+        ownerId: user.id,
+        isHidden: false,
+        githubRepoId: { not: { startsWith: 'gitea:' } },
+      },
+      select: { id: true, githubRepoId: true, ownerId: true },
+    })
+
+    if (!repo) {
+      return reply.code(404).send({ error: 'Repo not found' })
+    }
+
+    await enqueueRepoSync(repo, 'manual')
+    return { queued: 1, queueDepth: await getQueueDepth() }
+  })
+
   app.delete<{ Params: { repoId: string } }>('/repos/:repoId', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {

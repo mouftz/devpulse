@@ -31,6 +31,7 @@ type Overview = {
   }
   repos: Array<{
     id: string
+    provider: 'github' | 'gitea'
     fullName: string
     lastSyncedAt: string | null
     commits: number
@@ -60,6 +61,17 @@ type RepoSummary = {
     mergedPullRequests: number
     averagePrCycleHours: number | null
   }
+}
+
+type PrCycleTrend = {
+  averageHours: number | null
+  trend: 'improving' | 'slowing' | 'steady'
+  deltaHours: number | null
+  weeks: Array<{
+    week: string
+    averageHours: number
+    mergedPrs: number
+  }>
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
@@ -95,6 +107,7 @@ export function App() {
   const [repoActivity, setRepoActivity] = useState<ActivitySummary | null>(null)
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
   const [repoSummary, setRepoSummary] = useState<RepoSummary | null>(null)
+  const [prCycle, setPrCycle] = useState<PrCycleTrend | null>(null)
   const [repoSort, setRepoSort] = useState<RepoSort>('recent')
   const [state, setState] = useState<LoadState>('idle')
   const [syncing, setSyncing] = useState(false)
@@ -107,7 +120,7 @@ export function App() {
       const me = await api<{ user: User }>('/auth/me')
       setUser(me.user)
 
-      await api('/github/repos')
+      await Promise.all([api('/github/repos'), api('/gitea/repos').catch(() => null)])
       const [nextOverview, nextActivity] = await Promise.all([
         api<Overview>('/github/overview'),
         api<ActivitySummary>('/github/activity'),
@@ -121,6 +134,7 @@ export function App() {
       setOverview(null)
       setActivity(null)
       setRepoActivity(null)
+      setPrCycle(null)
       setSelectedRepoId(null)
       setRepoSummary(null)
       setState('error')
@@ -163,20 +177,24 @@ export function App() {
     if (!selectedRepoId) {
       setRepoSummary(null)
       setRepoActivity(null)
+      setPrCycle(null)
       return
     }
 
     void Promise.all([
       api<RepoSummary>(`/github/repos/${selectedRepoId}/summary`),
       api<ActivitySummary>(`/github/activity?repoId=${selectedRepoId}&days=30`),
+      api<PrCycleTrend>(`/github/repos/${selectedRepoId}/pr-cycle?days=90`),
     ])
-      .then(([nextSummary, nextActivity]) => {
+      .then(([nextSummary, nextActivity, nextPrCycle]) => {
         setRepoSummary(nextSummary)
         setRepoActivity(nextActivity)
+        setPrCycle(nextPrCycle)
       })
       .catch(() => {
         setRepoSummary(null)
         setRepoActivity(null)
+        setPrCycle(null)
       })
   }, [selectedRepoId])
 
@@ -188,34 +206,42 @@ export function App() {
     setSyncing(true)
     setNotice(null)
     try {
-      const result = await api<{ synced: number; failed: number }>('/github/repos/sync-all')
+      const [githubResult, giteaResult] = await Promise.all([
+        api<{ synced: number; failed: number }>('/github/repos/sync-all'),
+        api<{ synced: number; failed: number }>('/gitea/repos/sync-all').catch(() => ({ synced: 0, failed: 0 })),
+      ])
       const [nextOverview, nextActivity] = await Promise.all([
         api<Overview>('/github/overview'),
         api<ActivitySummary>('/github/activity'),
       ])
       setOverview(nextOverview)
       setActivity(nextActivity)
-      setNotice(`Synced ${result.synced} repos${result.failed ? `, ${result.failed} failed` : ''}.`)
+      const synced = githubResult.synced + giteaResult.synced
+      const failed = githubResult.failed + giteaResult.failed
+      setNotice(`Synced ${synced} repos${failed ? `, ${failed} failed` : ''}.`)
     } finally {
       setSyncing(false)
     }
   }
 
   const syncRepo = async (repoId: string) => {
+    const repo = overview?.repos.find((candidate) => candidate.id === repoId)
     setSyncingRepoId(repoId)
     setNotice(null)
     try {
-      await api(`/github/repos/${repoId}/sync`, { method: 'POST' })
-      const [nextOverview, nextActivity, nextRepoActivity, nextSummary] = await Promise.all([
+      await api(`/${repo?.provider ?? 'github'}/repos/${repoId}/sync`, { method: 'POST' })
+      const [nextOverview, nextActivity, nextRepoActivity, nextSummary, nextPrCycle] = await Promise.all([
         api<Overview>('/github/overview'),
         api<ActivitySummary>('/github/activity'),
         api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=30`),
         api<RepoSummary>(`/github/repos/${repoId}/summary`),
+        api<PrCycleTrend>(`/github/repos/${repoId}/pr-cycle?days=90`),
       ])
       setOverview(nextOverview)
       setActivity(nextActivity)
       setRepoActivity(nextRepoActivity)
       setRepoSummary(nextSummary)
+      setPrCycle(nextPrCycle)
       setSelectedRepoId(repoId)
       setNotice(`Synced ${nextSummary.repo.fullName}.`)
     } finally {
@@ -229,6 +255,7 @@ export function App() {
     setOverview(null)
     setActivity(null)
     setRepoActivity(null)
+    setPrCycle(null)
     setSelectedRepoId(null)
     setRepoSummary(null)
     setNotice(null)
@@ -279,6 +306,12 @@ export function App() {
                 {syncing ? <Loader2 className="spin" size={18} /> : user ? <RefreshCw size={18} /> : <Github size={18} />}
                 {user ? 'Sync All Repos' : 'Connect GitHub'}
               </button>
+              {user ? (
+                <button className="secondary-button" onClick={() => void api('/gitea/repos').then(load)}>
+                  <GitBranch size={18} />
+                  Add Gitea
+                </button>
+              ) : null}
               <button className="secondary-button" onClick={load}>
                 <RefreshCw size={18} />
                 Refresh
@@ -365,7 +398,7 @@ export function App() {
                   >
                     <div>
                       <strong>{repo.fullName}</strong>
-                      <span>{formatDate(repo.lastSyncedAt)}</span>
+                      <span>{repo.provider} · {formatDate(repo.lastSyncedAt)}</span>
                     </div>
                     <div className="repo-stats">
                       <span>{repo.commits} commits</span>
@@ -469,15 +502,62 @@ export function App() {
               <MiniActivityChart days={repoActivity?.days ?? []} />
             </div>
           ) : null}
+
+          {selectedRepo ? (
+            <div className="pr-trend-block">
+              <div>
+                <span className="subtle-label">PR cycle trend</span>
+                <strong>{formatTrend(prCycle)}</strong>
+                <p>{formatTrendDetail(prCycle)}</p>
+              </div>
+              <PrCycleChart trend={prCycle} />
+            </div>
+          ) : null}
         </section>
       </section>
     </main>
   )
 }
 
+const formatTrend = (trend: PrCycleTrend | null) => {
+  if (!trend || trend.averageHours == null) return 'No merged PRs'
+  if (trend.trend === 'improving') return 'Improving'
+  if (trend.trend === 'slowing') return 'Slowing'
+  return 'Steady'
+}
+
+const formatTrendDetail = (trend: PrCycleTrend | null) => {
+  if (!trend || trend.averageHours == null) return 'Sync a repo with merged PRs to see cycle trends.'
+  const average = `${trend.averageHours.toFixed(1)}h average`
+  if (trend.deltaHours == null) return average
+  const direction = trend.deltaHours > 0 ? 'slower' : 'faster'
+  return `${average}, ${Math.abs(trend.deltaHours).toFixed(1)}h ${direction} vs earlier weeks`
+}
+
+function PrCycleChart({ trend }: { trend: PrCycleTrend | null }) {
+  const weeks = trend?.weeks ?? []
+  const max = Math.max(...weeks.map((week) => week.averageHours), 1)
+
+  if (!weeks.length) {
+    return <div className="trend-empty">No weekly PR cycle data yet.</div>
+  }
+
+  return (
+    <div className="pr-cycle-chart" aria-label="PR cycle trend by week">
+      {weeks.map((week) => (
+        <span
+          key={week.week}
+          style={{ height: `${Math.max(10, (week.averageHours / max) * 100)}%` }}
+          title={`${week.averageHours.toFixed(1)}h average, ${week.mergedPrs} merged PRs`}
+        />
+      ))}
+    </div>
+  )
+}
+
 function MiniActivityChart({ days }: { days: ActivityDay[] }) {
   const chartDays = useMemo(() => {
-    if (days.length) return days
+    if (days.length) return days.slice(-30)
 
     const fallback: ActivityDay[] = []
     const end = new Date()

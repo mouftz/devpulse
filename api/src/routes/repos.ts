@@ -330,6 +330,7 @@ export async function repoRoutes(app: FastifyInstance) {
       },
       select: {
         id: true,
+        githubRepoId: true,
         fullName: true,
         lastSyncedAt: true,
       },
@@ -378,6 +379,88 @@ export async function repoRoutes(app: FastifyInstance) {
     }
   })
 
+  app.get<{
+    Params: { repoId: string }
+    Querystring: { days?: string }
+  }>('/repos/:repoId/pr-cycle', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    const dayCount = Math.min(Math.max(Number(request.query.days ?? 90), 7), 365)
+    const end = new Date()
+    const start = new Date(end)
+    start.setUTCDate(start.getUTCDate() - (dayCount - 1))
+    start.setUTCHours(0, 0, 0, 0)
+
+    const repo = await prisma.repo.findFirst({
+      where: {
+        id: request.params.repoId,
+        ownerId: user.id,
+      },
+      select: { id: true },
+    })
+
+    if (!repo) {
+      return reply.code(404).send({ error: 'Repo not found' })
+    }
+
+    const pullRequests = await prisma.pullRequest.findMany({
+      where: {
+        repoId: repo.id,
+        openedAt: { gte: start, lte: end },
+        mergedAt: { not: null },
+      },
+      select: {
+        openedAt: true,
+        mergedAt: true,
+      },
+      orderBy: { openedAt: 'asc' },
+    })
+
+    const weeks = new Map<string, number[]>()
+    for (const pullRequest of pullRequests) {
+      if (!pullRequest.mergedAt) continue
+
+      const weekStart = new Date(pullRequest.openedAt)
+      weekStart.setUTCHours(0, 0, 0, 0)
+      weekStart.setUTCDate(weekStart.getUTCDate() - weekStart.getUTCDay())
+      const week = weekStart.toISOString().slice(0, 10)
+      const cycleHours = (pullRequest.mergedAt.getTime() - pullRequest.openedAt.getTime()) / 1000 / 60 / 60
+      weeks.set(week, [...(weeks.get(week) ?? []), cycleHours])
+    }
+
+    const weekly = [...weeks.entries()].map(([week, values]) => ({
+      week,
+      averageHours: values.reduce((total, value) => total + value, 0) / values.length,
+      mergedPrs: values.length,
+    }))
+
+    const averageHours =
+      pullRequests.length > 0
+        ? weekly.reduce((total, week) => total + week.averageHours * week.mergedPrs, 0) / pullRequests.length
+        : null
+
+    const midpoint = Math.floor(weekly.length / 2)
+    const earlier = weekly.slice(0, midpoint)
+    const later = weekly.slice(midpoint)
+    const average = (items: typeof weekly) =>
+      items.length > 0 ? items.reduce((total, item) => total + item.averageHours, 0) / items.length : null
+    const earlierAverage = average(earlier)
+    const laterAverage = average(later)
+    const deltaHours = earlierAverage != null && laterAverage != null ? laterAverage - earlierAverage : null
+    const trend =
+      deltaHours == null || Math.abs(deltaHours) < 4 ? 'steady' : deltaHours < 0 ? 'improving' : 'slowing'
+
+    return {
+      averageHours,
+      trend,
+      deltaHours,
+      weeks: weekly,
+    }
+  })
+
   app.get('/overview', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
@@ -388,6 +471,7 @@ export async function repoRoutes(app: FastifyInstance) {
       where: { ownerId: user.id },
       select: {
         id: true,
+        githubRepoId: true,
         fullName: true,
         lastSyncedAt: true,
         _count: {
@@ -414,6 +498,7 @@ export async function repoRoutes(app: FastifyInstance) {
       totals,
       repos: repos.map((repo) => ({
         id: repo.id,
+        provider: repo.githubRepoId.startsWith('gitea:') ? 'gitea' : 'github',
         fullName: repo.fullName,
         lastSyncedAt: repo.lastSyncedAt,
         commits: repo._count.commits,

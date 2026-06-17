@@ -89,6 +89,8 @@ JWT_SECRET=change_me_in_development
 GITHUB_CLIENT_ID=your_github_oauth_client_id
 GITHUB_CLIENT_SECRET=your_github_oauth_client_secret
 GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
+GITEA_BASE_URL=https://your-gitea.example.com
+GITEA_TOKEN=your_gitea_access_token
 FRONTEND_URL=http://localhost:5173
 PORT=3000
 HOST=127.0.0.1
@@ -174,6 +176,9 @@ save the user, set a local session cookie, and redirect back to the frontend.
 | `/github/repos/:repoId/summary` | GET | Repo-level metrics |
 | `/github/overview` | GET | Dashboard totals and repo list |
 | `/github/activity` | GET | Daily commit counts for the heatmap |
+| `/gitea/repos` | GET | Discover and save Gitea repos |
+| `/gitea/repos/sync-all` | GET/POST | Sync all saved Gitea repos |
+| `/gitea/repos/:repoId/sync` | POST | Sync one Gitea repo |
 
 ## Project Structure
 
@@ -193,6 +198,7 @@ devpulse/
 - The frontend expects the API at `http://localhost:3000`.
 - The API sets an HTTP-only `devpulse_token` cookie after GitHub login.
 - The dashboard can sync all repos from the UI.
+- Gitea support uses `GITEA_BASE_URL` and `GITEA_TOKEN` from `api/.env`.
 - GitHub access tokens are stored in Postgres for local development; production
   should encrypt them before writing to the database.
 - `npm audit` currently reports dependency advisories. Avoid

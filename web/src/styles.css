@@ -485,6 +485,41 @@ h2 {
   padding: 22px;
 }
 
+.repo-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.segmented-control {
+  display: inline-flex;
+  min-height: 36px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+}
+
+.segmented-control button {
+  min-width: 72px;
+  padding: 0 10px;
+  color: rgba(246, 247, 251, 0.64);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.segmented-control button.active {
+  color: #f8fafc;
+  background: rgba(126, 224, 192, 0.14);
+}
+
+.segmented-control button:focus-visible {
+  outline: 2px solid rgba(126, 224, 192, 0.7);
+  outline-offset: 2px;
+}
+
 .section-title {
   margin-bottom: 20px;
 }
@@ -613,6 +648,41 @@ h2 {
   font-size: clamp(1.2rem, 2vw, 1.65rem);
 }
 
+.mini-chart-block {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.28fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 18px;
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.mini-chart-block strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 1.25rem;
+}
+
+.mini-chart {
+  display: grid;
+  grid-template-columns: repeat(30, minmax(2px, 1fr));
+  align-items: end;
+  gap: 4px;
+  height: 118px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.mini-chart span {
+  display: block;
+  min-height: 8px;
+  border-radius: 6px 6px 2px 2px;
+  background: linear-gradient(180deg, #7ee0c0, rgba(77, 171, 247, 0.55));
+}
+
 .rank-row {
   justify-content: flex-start;
 }
@@ -662,6 +732,11 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .repo-tools {
+    align-items: flex-end;
+    flex-direction: column;
+  }
+
   .dashboard {
     margin-top: 0;
   }
@@ -689,6 +764,19 @@ h2 {
 
   .detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .mini-chart-block {
+    grid-template-columns: 1fr;
+  }
+
+  .segmented-control {
+    width: 100%;
+  }
+
+  .segmented-control button {
+    flex: 1;
+    min-width: 0;
   }
 
   .hero-grid {

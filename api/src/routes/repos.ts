@@ -422,20 +422,40 @@ export async function repoRoutes(app: FastifyInstance) {
     }
   })
 
-  app.get('/activity', async (request, reply) => {
+  app.get<{
+    Querystring: { repoId?: string; days?: string }
+  }>('/activity', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
       return
     }
 
+    const dayCount = Math.min(Math.max(Number(request.query.days ?? 365), 1), 365)
     const end = new Date()
     const start = new Date(end)
-    start.setUTCDate(start.getUTCDate() - 364)
+    start.setUTCDate(start.getUTCDate() - (dayCount - 1))
     start.setUTCHours(0, 0, 0, 0)
+
+    if (request.query.repoId) {
+      const repo = await prisma.repo.findFirst({
+        where: {
+          id: request.query.repoId,
+          ownerId: user.id,
+        },
+        select: { id: true },
+      })
+
+      if (!repo) {
+        return reply.code(404).send({ error: 'Repo not found' })
+      }
+    }
 
     const commits = await prisma.commit.findMany({
       where: {
-        repo: { ownerId: user.id },
+        repo: {
+          ownerId: user.id,
+          ...(request.query.repoId ? { id: request.query.repoId } : {}),
+        },
         committedAt: { gte: start, lte: end },
       },
       select: { committedAt: true },

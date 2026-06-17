@@ -63,6 +63,7 @@ type RepoSummary = {
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
+type RepoSort = 'recent' | 'commits' | 'unsynced'
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`${API_URL}${path}`, {
@@ -91,8 +92,10 @@ export function App() {
   const [user, setUser] = useState<User | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [activity, setActivity] = useState<ActivitySummary | null>(null)
+  const [repoActivity, setRepoActivity] = useState<ActivitySummary | null>(null)
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
   const [repoSummary, setRepoSummary] = useState<RepoSummary | null>(null)
+  const [repoSort, setRepoSort] = useState<RepoSort>('recent')
   const [state, setState] = useState<LoadState>('idle')
   const [syncing, setSyncing] = useState(false)
   const [syncingRepoId, setSyncingRepoId] = useState<string | null>(null)
@@ -117,6 +120,7 @@ export function App() {
       setUser(null)
       setOverview(null)
       setActivity(null)
+      setRepoActivity(null)
       setSelectedRepoId(null)
       setRepoSummary(null)
       setState('error')
@@ -131,6 +135,26 @@ export function App() {
     return [...(overview?.repos ?? [])].sort((a, b) => b.commits - a.commits).slice(0, 5)
   }, [overview])
 
+  const sortedRepos = useMemo(() => {
+    const repos = [...(overview?.repos ?? [])]
+    if (repoSort === 'commits') {
+      return repos.sort((a, b) => b.commits - a.commits)
+    }
+    if (repoSort === 'unsynced') {
+      return repos.sort((a, b) => {
+        if (!a.lastSyncedAt && b.lastSyncedAt) return -1
+        if (a.lastSyncedAt && !b.lastSyncedAt) return 1
+        return a.fullName.localeCompare(b.fullName)
+      })
+    }
+    return repos.sort((a, b) => {
+      if (!a.lastSyncedAt && !b.lastSyncedAt) return a.fullName.localeCompare(b.fullName)
+      if (!a.lastSyncedAt) return 1
+      if (!b.lastSyncedAt) return -1
+      return new Date(b.lastSyncedAt).getTime() - new Date(a.lastSyncedAt).getTime()
+    })
+  }, [overview, repoSort])
+
   const selectedRepo = useMemo(() => {
     return overview?.repos.find((repo) => repo.id === selectedRepoId) ?? null
   }, [overview, selectedRepoId])
@@ -138,12 +162,22 @@ export function App() {
   useEffect(() => {
     if (!selectedRepoId) {
       setRepoSummary(null)
+      setRepoActivity(null)
       return
     }
 
-    void api<RepoSummary>(`/github/repos/${selectedRepoId}/summary`)
-      .then(setRepoSummary)
-      .catch(() => setRepoSummary(null))
+    void Promise.all([
+      api<RepoSummary>(`/github/repos/${selectedRepoId}/summary`),
+      api<ActivitySummary>(`/github/activity?repoId=${selectedRepoId}&days=30`),
+    ])
+      .then(([nextSummary, nextActivity]) => {
+        setRepoSummary(nextSummary)
+        setRepoActivity(nextActivity)
+      })
+      .catch(() => {
+        setRepoSummary(null)
+        setRepoActivity(null)
+      })
   }, [selectedRepoId])
 
   const connectGitHub = () => {
@@ -172,13 +206,15 @@ export function App() {
     setNotice(null)
     try {
       await api(`/github/repos/${repoId}/sync`, { method: 'POST' })
-      const [nextOverview, nextActivity, nextSummary] = await Promise.all([
+      const [nextOverview, nextActivity, nextRepoActivity, nextSummary] = await Promise.all([
         api<Overview>('/github/overview'),
         api<ActivitySummary>('/github/activity'),
+        api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=30`),
         api<RepoSummary>(`/github/repos/${repoId}/summary`),
       ])
       setOverview(nextOverview)
       setActivity(nextActivity)
+      setRepoActivity(nextRepoActivity)
       setRepoSummary(nextSummary)
       setSelectedRepoId(repoId)
       setNotice(`Synced ${nextSummary.repo.fullName}.`)
@@ -192,6 +228,7 @@ export function App() {
     setUser(null)
     setOverview(null)
     setActivity(null)
+    setRepoActivity(null)
     setSelectedRepoId(null)
     setRepoSummary(null)
     setNotice(null)
@@ -296,9 +333,22 @@ export function App() {
                 <p className="eyebrow">Repository Index</p>
                 <h2>Synced GitHub repos</h2>
               </div>
-              <button className="icon-button" onClick={syncAll} disabled={!user || syncing} title="Sync all repos">
-                {syncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-              </button>
+              <div className="repo-tools">
+                <div className="segmented-control" aria-label="Sort repositories">
+                  <button className={repoSort === 'recent' ? 'active' : ''} onClick={() => setRepoSort('recent')}>
+                    Recent
+                  </button>
+                  <button className={repoSort === 'commits' ? 'active' : ''} onClick={() => setRepoSort('commits')}>
+                    Commits
+                  </button>
+                  <button className={repoSort === 'unsynced' ? 'active' : ''} onClick={() => setRepoSort('unsynced')}>
+                    Unsynced
+                  </button>
+                </div>
+                <button className="icon-button" onClick={syncAll} disabled={!user || syncing} title="Sync all repos">
+                  {syncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+                </button>
+              </div>
             </div>
 
             {state === 'loading' ? (
@@ -307,7 +357,7 @@ export function App() {
               <div className="empty-state">Connect GitHub to populate the dashboard.</div>
             ) : (
               <div className="repo-table">
-                {(overview?.repos ?? []).map((repo) => (
+                {sortedRepos.map((repo) => (
                   <button
                     className={`repo-row ${repo.id === selectedRepoId ? 'selected' : ''}`}
                     key={repo.id}
@@ -409,9 +459,48 @@ export function App() {
           ) : (
             <div className="empty-state small">Click a repo row to inspect it.</div>
           )}
+
+          {selectedRepo ? (
+            <div className="mini-chart-block">
+              <div>
+                <span className="subtle-label">Last 30 days</span>
+                <strong>{repoActivity?.total ?? 0} commits</strong>
+              </div>
+              <MiniActivityChart days={repoActivity?.days ?? []} />
+            </div>
+          ) : null}
         </section>
       </section>
     </main>
+  )
+}
+
+function MiniActivityChart({ days }: { days: ActivityDay[] }) {
+  const chartDays = useMemo(() => {
+    if (days.length) return days
+
+    const fallback: ActivityDay[] = []
+    const end = new Date()
+    const start = new Date(end)
+    start.setDate(start.getDate() - 29)
+    for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+      fallback.push({ date: cursor.toISOString().slice(0, 10), count: 0 })
+    }
+    return fallback
+  }, [days])
+
+  const max = Math.max(...chartDays.map((day) => day.count), 1)
+
+  return (
+    <div className="mini-chart" aria-label="Selected repo commits in the last 30 days">
+      {chartDays.map((day) => (
+        <span
+          key={day.date}
+          style={{ height: `${Math.max(8, (day.count / max) * 100)}%` }}
+          title={`${day.count} commits on ${day.date}`}
+        />
+      ))}
+    </div>
   )
 }
 

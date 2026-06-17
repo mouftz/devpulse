@@ -200,10 +200,29 @@ devpulse/
 
 ## Roadmap
 
-- Per-repo activity charts
-- PR cycle time trends
-- Review latency metrics
-- Repo filtering and date ranges
-- Background sync jobs
-- ML scoring pipeline integration
-- Deployment setup for Cloud Run / Cloud SQL
+### Analytics
+
+- Per-repo activity charts with commits-over-time line charts.
+- PR cycle time trends that show whether merge time is improving or getting
+  slower.
+- Review latency metrics, especially time from PR open to first review.
+- Repo filtering and a dashboard date range picker.
+
+### Infrastructure
+
+- Background sync jobs. Sync is currently manual; the Redis queue and ETL worker
+  should run scheduled syncs automatically.
+- Keep generated OS files out of Git. `.DS_Store` is ignored and should stay
+  untracked.
+
+### ML Pipeline
+
+- Train the burnout predictor and anomaly detector on real ingested data.
+- Wire the ML service `/score` endpoint into the sync flow.
+- Store model outputs in the `ml_scores` table.
+- Surface burnout and anomaly scores in the dashboard.
+
+### Deployment
+
+- GCP Cloud Run and Cloud SQL setup.
+- GitHub Actions CI/CD pipeline.

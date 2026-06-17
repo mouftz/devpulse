@@ -6,6 +6,7 @@ import {
   Flame,
   GitBranch,
   Github,
+  LogOut,
   Loader2,
   RefreshCw,
   ShieldCheck,
@@ -47,6 +48,20 @@ type ActivitySummary = {
   days: ActivityDay[]
 }
 
+type RepoSummary = {
+  repo: {
+    id: string
+    fullName: string
+    lastSyncedAt: string | null
+  }
+  metrics: {
+    commits: number
+    pullRequests: number
+    mergedPullRequests: number
+    averagePrCycleHours: number | null
+  }
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -76,8 +91,11 @@ export function App() {
   const [user, setUser] = useState<User | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [activity, setActivity] = useState<ActivitySummary | null>(null)
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
+  const [repoSummary, setRepoSummary] = useState<RepoSummary | null>(null)
   const [state, setState] = useState<LoadState>('idle')
   const [syncing, setSyncing] = useState(false)
+  const [syncingRepoId, setSyncingRepoId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
   const load = async () => {
@@ -93,11 +111,14 @@ export function App() {
       ])
       setOverview(nextOverview)
       setActivity(nextActivity)
+      setSelectedRepoId((current) => current ?? nextOverview.repos.find((repo) => repo.lastSyncedAt)?.id ?? null)
       setState('ready')
     } catch {
       setUser(null)
       setOverview(null)
       setActivity(null)
+      setSelectedRepoId(null)
+      setRepoSummary(null)
       setState('error')
     }
   }
@@ -109,6 +130,21 @@ export function App() {
   const topRepos = useMemo(() => {
     return [...(overview?.repos ?? [])].sort((a, b) => b.commits - a.commits).slice(0, 5)
   }, [overview])
+
+  const selectedRepo = useMemo(() => {
+    return overview?.repos.find((repo) => repo.id === selectedRepoId) ?? null
+  }, [overview, selectedRepoId])
+
+  useEffect(() => {
+    if (!selectedRepoId) {
+      setRepoSummary(null)
+      return
+    }
+
+    void api<RepoSummary>(`/github/repos/${selectedRepoId}/summary`)
+      .then(setRepoSummary)
+      .catch(() => setRepoSummary(null))
+  }, [selectedRepoId])
 
   const connectGitHub = () => {
     window.location.href = `${API_URL}/auth/github`
@@ -131,6 +167,36 @@ export function App() {
     }
   }
 
+  const syncRepo = async (repoId: string) => {
+    setSyncingRepoId(repoId)
+    setNotice(null)
+    try {
+      await api(`/github/repos/${repoId}/sync`, { method: 'POST' })
+      const [nextOverview, nextActivity, nextSummary] = await Promise.all([
+        api<Overview>('/github/overview'),
+        api<ActivitySummary>('/github/activity'),
+        api<RepoSummary>(`/github/repos/${repoId}/summary`),
+      ])
+      setOverview(nextOverview)
+      setActivity(nextActivity)
+      setRepoSummary(nextSummary)
+      setSelectedRepoId(repoId)
+      setNotice(`Synced ${nextSummary.repo.fullName}.`)
+    } finally {
+      setSyncingRepoId(null)
+    }
+  }
+
+  const logout = async () => {
+    await api('/auth/logout', { method: 'POST' }).catch(() => null)
+    setUser(null)
+    setOverview(null)
+    setActivity(null)
+    setSelectedRepoId(null)
+    setRepoSummary(null)
+    setNotice(null)
+  }
+
   const totals = overview?.totals ?? { repos: 0, syncedRepos: 0, commits: 0, pullRequests: 0 }
 
   return (
@@ -146,9 +212,14 @@ export function App() {
             <span>DevPulse</span>
           </div>
           {user ? (
-            <div className="profile-chip">
-              {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <Github size={18} />}
-              <span>{user.username}</span>
+            <div className="session-actions">
+              <div className="profile-chip">
+                {user.avatarUrl ? <img src={user.avatarUrl} alt="" /> : <Github size={18} />}
+                <span>{user.username}</span>
+              </div>
+              <button className="icon-button" onClick={logout} title="Log out">
+                <LogOut size={18} />
+              </button>
             </div>
           ) : (
             <button className="ghost-button" onClick={connectGitHub}>
@@ -237,7 +308,11 @@ export function App() {
             ) : (
               <div className="repo-table">
                 {(overview?.repos ?? []).map((repo) => (
-                  <div className="repo-row" key={repo.id}>
+                  <button
+                    className={`repo-row ${repo.id === selectedRepoId ? 'selected' : ''}`}
+                    key={repo.id}
+                    onClick={() => setSelectedRepoId(repo.id)}
+                  >
                     <div>
                       <strong>{repo.fullName}</strong>
                       <span>{formatDate(repo.lastSyncedAt)}</span>
@@ -245,8 +320,20 @@ export function App() {
                     <div className="repo-stats">
                       <span>{repo.commits} commits</span>
                       <span>{repo.pullRequests} PRs</span>
+                      <span
+                        className="mini-button"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          void syncRepo(repo.id)
+                        }}
+                        title={`Sync ${repo.fullName}`}
+                        role="button"
+                        tabIndex={0}
+                      >
+                        {syncingRepoId === repo.id ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
+                      </span>
                     </div>
-                  </div>
+                  </button>
                 ))}
               </div>
             )}
@@ -277,6 +364,52 @@ export function App() {
             </div>
           </aside>
         </div>
+
+        <section className="glass-panel detail-panel">
+          <div className="section-title">
+            <div>
+              <p className="eyebrow">Repo Detail</p>
+              <h2>{selectedRepo?.fullName ?? 'Select a repository'}</h2>
+            </div>
+            {selectedRepo ? (
+              <button
+                className="secondary-button"
+                onClick={() => void syncRepo(selectedRepo.id)}
+                disabled={syncingRepoId === selectedRepo.id}
+              >
+                {syncingRepoId === selectedRepo.id ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+                Sync Repo
+              </button>
+            ) : null}
+          </div>
+
+          {selectedRepo ? (
+            <div className="detail-grid">
+              <div>
+                <span>Last synced</span>
+                <strong>{formatDate(repoSummary?.repo.lastSyncedAt ?? selectedRepo.lastSyncedAt)}</strong>
+              </div>
+              <div>
+                <span>Commits</span>
+                <strong>{repoSummary?.metrics.commits ?? selectedRepo.commits}</strong>
+              </div>
+              <div>
+                <span>Pull requests</span>
+                <strong>{repoSummary?.metrics.pullRequests ?? selectedRepo.pullRequests}</strong>
+              </div>
+              <div>
+                <span>Avg PR cycle</span>
+                <strong>
+                  {repoSummary?.metrics.averagePrCycleHours == null
+                    ? 'No data'
+                    : `${repoSummary.metrics.averagePrCycleHours.toFixed(1)}h`}
+                </strong>
+              </div>
+            </div>
+          ) : (
+            <div className="empty-state small">Click a repo row to inspect it.</div>
+          )}
+        </section>
       </section>
     </main>
   )

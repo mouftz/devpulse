@@ -76,6 +76,7 @@ button {
 }
 
 .brand,
+.session-actions,
 .profile-chip,
 .ghost-button,
 .primary-button,
@@ -117,6 +118,10 @@ button {
 
 .profile-chip {
   padding: 6px 12px 6px 6px;
+}
+
+.session-actions {
+  gap: 8px;
 }
 
 .profile-chip img {
@@ -507,6 +512,33 @@ h2 {
   border-radius: 8px;
 }
 
+.repo-row {
+  width: 100%;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    transform 160ms ease;
+}
+
+.repo-row:hover,
+.repo-row.selected {
+  background: rgba(126, 224, 192, 0.09);
+  border-color: rgba(126, 224, 192, 0.32);
+}
+
+.repo-row:hover {
+  transform: translateY(-1px);
+}
+
+.repo-row:focus-visible {
+  outline: 2px solid rgba(126, 224, 192, 0.7);
+  outline-offset: 2px;
+}
+
 .repo-row strong,
 .repo-row span,
 .rank-row strong,
@@ -514,7 +546,7 @@ h2 {
   display: block;
 }
 
-.repo-row span,
+.repo-row > div:first-child span,
 .rank-row p,
 .repo-stats span {
   margin: 4px 0 0;
@@ -525,9 +557,60 @@ h2 {
 .repo-stats {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   justify-content: flex-end;
   gap: 10px;
   text-align: right;
+}
+
+.mini-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: rgba(246, 247, 251, 0.72);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  margin: 0 0 0 2px;
+  transition: color 160ms ease;
+}
+
+.mini-button:focus-visible {
+  outline: 2px solid rgba(126, 224, 192, 0.7);
+  outline-offset: 2px;
+}
+
+.detail-panel {
+  margin-top: 16px;
+  padding: 22px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.detail-grid > div {
+  min-height: 98px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+}
+
+.detail-grid span {
+  display: block;
+  color: rgba(246, 247, 251, 0.58);
+  font-size: 0.9rem;
+}
+
+.detail-grid strong {
+  display: block;
+  margin-top: 16px;
+  font-size: clamp(1.2rem, 2vw, 1.65rem);
 }
 
 .rank-row {
@@ -575,6 +658,10 @@ h2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .dashboard {
     margin-top: 0;
   }
@@ -597,6 +684,10 @@ h2 {
   }
 
   .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-grid {
     grid-template-columns: 1fr;
   }
 

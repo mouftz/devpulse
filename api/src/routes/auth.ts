@@ -39,7 +39,7 @@ export async function authRoutes(app: FastifyInstance) {
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: callbackUrl(),
-      scope: 'read:user user:email',
+      scope: 'read:user user:email repo',
       state,
     })
 
@@ -116,6 +116,12 @@ export async function authRoutes(app: FastifyInstance) {
     })
 
     const token = app.jwt.sign({ sub: user.id, githubId: user.githubId })
+    reply.setCookie('devpulse_token', token, {
+      httpOnly: true,
+      path: '/',
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+    })
 
     return {
       message: 'GitHub connected',
@@ -128,5 +134,10 @@ export async function authRoutes(app: FastifyInstance) {
         avatarUrl: user.avatarUrl,
       },
     }
+  })
+
+  app.post('/logout', async (_request, reply) => {
+    reply.clearCookie('devpulse_token', { path: '/' })
+    return { message: 'Logged out' }
   })
 }

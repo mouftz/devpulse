@@ -32,6 +32,8 @@ const requiredEnv = (name: string) => {
 const callbackUrl = () =>
   process.env.GITHUB_CALLBACK_URL ?? 'http://localhost:3000/auth/github/callback'
 
+const frontendUrl = () => process.env.FRONTEND_URL ?? 'http://localhost:5173'
+
 export async function authRoutes(app: FastifyInstance) {
   app.get('/github', async (_request, reply) => {
     const clientId = requiredEnv('GITHUB_CLIENT_ID')
@@ -123,16 +125,37 @@ export async function authRoutes(app: FastifyInstance) {
       secure: process.env.NODE_ENV === 'production',
     })
 
-    return {
-      message: 'GitHub connected',
-      token,
-      user: {
-        id: user.id,
-        githubId: user.githubId,
-        username: user.username,
-        email: user.email,
-        avatarUrl: user.avatarUrl,
-      },
+    const redirectUrl = new URL(frontendUrl())
+    redirectUrl.searchParams.set('connected', 'github')
+    return reply.redirect(redirectUrl.toString())
+  })
+
+  app.get('/me', async (request, reply) => {
+    const token = request.cookies.devpulse_token
+    if (!token) {
+      return reply.code(401).send({ error: 'Not authenticated' })
+    }
+
+    try {
+      const payload = app.jwt.verify<{ sub: string }>(token)
+      const user = await prisma.user.findUnique({
+        where: { id: payload.sub },
+        select: {
+          id: true,
+          githubId: true,
+          username: true,
+          email: true,
+          avatarUrl: true,
+        },
+      })
+
+      if (!user) {
+        return reply.code(401).send({ error: 'User not found' })
+      }
+
+      return { user }
+    } catch {
+      return reply.code(401).send({ error: 'Invalid session' })
     }
   })
 

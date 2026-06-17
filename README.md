@@ -1,74 +1,209 @@
-# DevPulse — Developer Analytics SaaS
+# DevPulse
 
-A backend platform that ingests GitHub activity, computes engineering metrics,
-and surfaces ML-powered burnout risk scores for individual developers and teams.
+DevPulse is a developer analytics app that connects to GitHub, syncs repository
+activity, and turns commits and pull requests into a clean dashboard.
 
-## Tech stack
+The goal is to make engineering activity easier to understand at a glance:
+which repos are active, how often work is landing, and where team/product
+signals can eventually feed deeper analytics and ML scoring.
 
-| Layer | Technology | Why |
-|---|---|---|
-| API | Node.js + Fastify + TypeScript | Type-safe, fast, familiar |
-| ORM | Prisma | Schema-first, great migrations |
-| Database | PostgreSQL 16 | Relational, analytical queries |
-| Cache / Queue | Redis 7 | Sessions, job queue, hot metrics |
-| ML service | Python + FastAPI + scikit-learn | IsolationForest anomaly detection, RF burnout predictor |
-| ETL pipeline | Python + httpx + asyncio | Async GitHub ingestion, BigQuery load |
-| Containers | Docker + docker-compose | Full local dev parity |
-| Monitoring | Prometheus + Grafana | Metrics dashboards, alerting |
-| Cloud | GCP — Cloud Run + Cloud SQL + BigQuery | Serverless containers, managed DB |
-| CI/CD | GitHub Actions | Test → build → deploy on push |
+## What Works Today
 
-## 
+- GitHub OAuth login
+- Browser session cookie after login
+- GitHub repository discovery
+- One-click sync for all saved repos
+- Commit and pull request ingestion into Postgres
+- Dashboard totals for repos, synced repos, commits, and pull requests
+- GitHub-style contribution heatmap for commit activity
+- Repo table and “most active” ranking
+
+## Product Direction
+
+DevPulse is being built as a developer analytics SaaS. The current version is
+focused on proving the core data loop:
+
+1. Connect GitHub.
+2. Save the authenticated user.
+3. Discover repositories.
+4. Sync commits and pull requests.
+5. Display useful engineering activity in the dashboard.
+
+Next steps are deeper analytics: PR cycle time trends, commit velocity by repo,
+review latency, anomaly detection, and ML-powered burnout risk scoring.
+
+## Tech Stack
+
+| Layer | Technology |
+| --- | --- |
+| Frontend | React, Vite, TypeScript |
+| API | Node.js, Fastify, TypeScript |
+| ORM | Prisma |
+| Database | PostgreSQL |
+| Cache / Queue | Redis |
+| ML service | Python, FastAPI, scikit-learn |
+| Containers | Docker Compose |
+| Monitoring | Prometheus, Grafana |
+
+## Architecture
+
+```text
+GitHub OAuth
+    |
+    v
+Fastify API  --->  PostgreSQL
+    |                |
+    |                v
+    |          commits, PRs, repos, users
+    |
+    v
+React Dashboard
+```
+
+The API owns authentication, GitHub API calls, database writes, and analytics
+responses. The frontend reads from the API using the browser session cookie set
+after GitHub OAuth.
+
+The ML and ETL folders are scaffolded for the larger product direction. The
+main working path right now is the web app plus API plus Postgres.
+
+## Local Setup
+
+### 1. Install Dependencies
 
 ```bash
-# 1. Clone and enter the repo
-git clone https://github.com/yourname/devpulse && cd devpulse
+cd api
+npm install
 
-# 2. Copy env file and fill in your GitHub OAuth app credentials
-cp .env.example .env
-
-# 3. Start all services
-docker compose up --build
-
-# 4. Run DB migrations
-docker compose exec api npx prisma migrate dev
-
-# 5. Open services
-#   API        →  http://localhost:3000
-#   Grafana    →  http://localhost:3001  (admin / admin)
-#   Prometheus →  http://localhost:9090
-#   ML service →  http://localhost:8001/docs
+cd ../web
+npm install
 ```
 
-## Project structure
+### 2. Create API Environment File
 
+Create `api/.env`:
+
+```env
+DATABASE_URL=postgresql://devpulse:devpulse_secret@localhost:5433/devpulse_db
+JWT_SECRET=change_me_in_development
+GITHUB_CLIENT_ID=your_github_oauth_client_id
+GITHUB_CLIENT_SECRET=your_github_oauth_client_secret
+GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
+FRONTEND_URL=http://localhost:5173
+PORT=3000
+HOST=127.0.0.1
+NODE_ENV=development
 ```
+
+Do not commit real secrets.
+
+### 3. Start Postgres and Redis
+
+From the project root:
+
+```bash
+docker compose up postgres redis
+```
+
+This project maps Postgres to local port `5433` to avoid conflicts with other
+local Postgres installs.
+
+### 4. Run Database Migrations
+
+In a second terminal:
+
+```bash
+cd api
+npx prisma migrate dev
+```
+
+### 5. Start the API
+
+```bash
+cd api
+npm run build
+node dist/index.js
+```
+
+Health check:
+
+```text
+http://localhost:3000/health
+```
+
+### 6. Start the Frontend
+
+In another terminal:
+
+```bash
+cd web
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:5173
+```
+
+## GitHub OAuth Setup
+
+Create a GitHub OAuth app and use this callback URL:
+
+```text
+http://localhost:3000/auth/github/callback
+```
+
+Put the app’s client ID and client secret in `api/.env`.
+
+When you click “Connect GitHub” in the dashboard, the API will complete OAuth,
+save the user, set a local session cookie, and redirect back to the frontend.
+
+## Useful API Routes
+
+| Route | Method | Purpose |
+| --- | --- | --- |
+| `/health` | GET | API health check |
+| `/auth/github` | GET | Start GitHub OAuth |
+| `/auth/github/callback` | GET | GitHub OAuth callback |
+| `/auth/me` | GET | Current logged-in user |
+| `/auth/logout` | POST | Clear session cookie |
+| `/github/repos` | GET | Discover and save GitHub repos |
+| `/github/repos/sync-all` | GET/POST | Sync all saved repos |
+| `/github/repos/:repoId/sync` | POST | Sync one repo |
+| `/github/repos/:repoId/summary` | GET | Repo-level metrics |
+| `/github/overview` | GET | Dashboard totals and repo list |
+| `/github/activity` | GET | Daily commit counts for the heatmap |
+
+## Project Structure
+
+```text
 devpulse/
-├── api/                      # Node.js + Fastify backend
-│   ├── prisma/
-│   │   └── schema.prisma     # Database schema (source of truth)
-│   └── src/
-│       ├── routes/           # HTTP route handlers
-│       ├── services/         # Business logic
-│       ├── middleware/       # Auth, rate limiting
-│       ├── jobs/             # Redis queue consumers
-│       └── db/               # Prisma client singleton
-│
-├── ml-service/               # Python FastAPI ML microservice
-│   ├── api/main.py           # /score, /train, /health endpoints
-│   ├── features/extractor.py # SQL → feature vector
-│   └── models/
-│       ├── burnout.py        # RandomForest classifier
-│       └── anomaly.py        # IsolationForest detector
-│
-├── etl/
-│   └── pipelines/
-│       └── github_ingest.py  # Nightly GitHub → Postgres → BigQuery
-│
-├── infra/
-│   └── monitoring/
-│       └── prometheus.yml    # Scrape config
-│
-├── docker-compose.yml        # Full local environment
+├── api/                 # Fastify API, Prisma schema, GitHub sync routes
+├── web/                 # React/Vite dashboard
+├── ml-service/          # FastAPI ML service scaffold
+├── etl/                 # Background GitHub ingestion scaffold
+├── infra/monitoring/    # Prometheus config
+├── docker-compose.yml   # Local Postgres, Redis, services
 └── README.md
 ```
+
+## Development Notes
+
+- The frontend expects the API at `http://localhost:3000`.
+- The API sets an HTTP-only `devpulse_token` cookie after GitHub login.
+- The dashboard can sync all repos from the UI.
+- GitHub access tokens are stored in Postgres for local development; production
+  should encrypt them before writing to the database.
+- `npm audit` currently reports dependency advisories. Avoid
+  `npm audit fix --force` unless you are ready to handle breaking upgrades.
+
+## Roadmap
+
+- Per-repo activity charts
+- PR cycle time trends
+- Review latency metrics
+- Repo filtering and date ranges
+- Background sync jobs
+- ML scoring pipeline integration
+- Deployment setup for Cloud Run / Cloud SQL

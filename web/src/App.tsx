@@ -37,6 +37,16 @@ type Overview = {
   }>
 }
 
+type ActivityDay = {
+  date: string
+  count: number
+}
+
+type ActivitySummary = {
+  total: number
+  days: ActivityDay[]
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
@@ -65,6 +75,7 @@ const formatDate = (value: string | null) => {
 export function App() {
   const [user, setUser] = useState<User | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
+  const [activity, setActivity] = useState<ActivitySummary | null>(null)
   const [state, setState] = useState<LoadState>('idle')
   const [syncing, setSyncing] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -76,12 +87,17 @@ export function App() {
       setUser(me.user)
 
       await api('/github/repos')
-      const nextOverview = await api<Overview>('/github/overview')
+      const [nextOverview, nextActivity] = await Promise.all([
+        api<Overview>('/github/overview'),
+        api<ActivitySummary>('/github/activity'),
+      ])
       setOverview(nextOverview)
+      setActivity(nextActivity)
       setState('ready')
     } catch {
       setUser(null)
       setOverview(null)
+      setActivity(null)
       setState('error')
     }
   }
@@ -103,8 +119,12 @@ export function App() {
     setNotice(null)
     try {
       const result = await api<{ synced: number; failed: number }>('/github/repos/sync-all')
-      const nextOverview = await api<Overview>('/github/overview')
+      const [nextOverview, nextActivity] = await Promise.all([
+        api<Overview>('/github/overview'),
+        api<ActivitySummary>('/github/activity'),
+      ])
       setOverview(nextOverview)
+      setActivity(nextActivity)
       setNotice(`Synced ${result.synced} repos${result.failed ? `, ${result.failed} failed` : ''}.`)
     } finally {
       setSyncing(false)
@@ -187,6 +207,17 @@ export function App() {
           <Metric title="Pull Requests" value={totals.pullRequests} icon={<Flame size={20} />} />
         </div>
 
+        <section className="glass-panel contribution-panel">
+          <div className="section-title">
+            <div>
+              <p className="eyebrow">Commit Rhythm</p>
+              <h2>{activity?.total ?? 0} contributions in the last year</h2>
+            </div>
+            <span className="subtle-label">Commits</span>
+          </div>
+          <ContributionGraph days={activity?.days ?? []} />
+        </section>
+
         <div className="content-grid">
           <section className="glass-panel repo-panel">
             <div className="section-title">
@@ -257,6 +288,130 @@ function Metric({ title, value, icon }: { title: string; value: number; icon: Re
       <div className="metric-icon">{icon}</div>
       <span>{title}</span>
       <strong>{value}</strong>
+    </div>
+  )
+}
+
+function ContributionGraph({ days }: { days: ActivityDay[] }) {
+  const [hoveredDay, setHoveredDay] = useState<ActivityDay | null>(null)
+  const normalizedDays = useMemo(() => {
+    if (days.length) return days
+
+    const fallback: ActivityDay[] = []
+    const end = new Date()
+    const start = new Date(end)
+    start.setDate(start.getDate() - 364)
+    for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+      fallback.push({ date: cursor.toISOString().slice(0, 10), count: 0 })
+    }
+    return fallback
+  }, [days])
+
+  const weeks = useMemo(() => {
+    const padded: Array<ActivityDay | null> = []
+    const first = new Date(`${normalizedDays[0]?.date}T00:00:00`)
+    const leading = Number.isNaN(first.getTime()) ? 0 : first.getDay()
+
+    for (let index = 0; index < leading; index += 1) {
+      padded.push(null)
+    }
+    padded.push(...normalizedDays)
+
+    const nextWeeks: Array<Array<ActivityDay | null>> = []
+    for (let index = 0; index < padded.length; index += 7) {
+      nextWeeks.push(padded.slice(index, index + 7))
+    }
+    return nextWeeks
+  }, [normalizedDays])
+
+  const max = Math.max(...normalizedDays.map((day) => day.count), 1)
+
+  const levelFor = (count: number) => {
+    if (count === 0) return 0
+    if (count <= Math.ceil(max * 0.25)) return 1
+    if (count <= Math.ceil(max * 0.5)) return 2
+    if (count <= Math.ceil(max * 0.75)) return 3
+    return 4
+  }
+
+  const monthLabels = useMemo(() => {
+    const labels: Array<{ month: string; week: number }> = []
+    let previous = ''
+    weeks.forEach((week, weekIndex) => {
+      const firstDay = week.find(Boolean)
+      if (!firstDay) return
+
+      const month = new Intl.DateTimeFormat(undefined, { month: 'short' }).format(
+        new Date(`${firstDay.date}T00:00:00`),
+      )
+      if (month !== previous) {
+        labels.push({ month, week: weekIndex })
+        previous = month
+      }
+    })
+    return labels
+  }, [weeks])
+
+  return (
+    <div className="contribution-shell">
+      <div className={`commit-tooltip ${hoveredDay ? 'visible' : ''}`}>
+        {hoveredDay ? (
+          <>
+            <strong>{hoveredDay.count}</strong>
+            <span>{hoveredDay.count === 1 ? 'commit' : 'commits'}</span>
+            <small>
+              {new Intl.DateTimeFormat(undefined, {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+              }).format(new Date(`${hoveredDay.date}T00:00:00`))}
+            </small>
+          </>
+        ) : null}
+      </div>
+      <div className="month-row">
+        {monthLabels.map((label) => (
+          <span key={`${label.month}-${label.week}`} style={{ gridColumnStart: label.week + 1 }}>
+            {label.month}
+          </span>
+        ))}
+      </div>
+      <div className="heatmap-wrap">
+        <div className="weekday-labels">
+          <span>Mon</span>
+          <span>Wed</span>
+          <span>Fri</span>
+        </div>
+        <div className="heatmap-grid">
+          {weeks.map((week, weekIndex) => (
+            <div className="heatmap-week" key={weekIndex}>
+              {Array.from({ length: 7 }).map((_, dayIndex) => {
+                const day = week[dayIndex]
+                return day ? (
+                  <span
+                    className={`heatmap-cell level-${levelFor(day.count)}`}
+                    key={day.date}
+                    onBlur={() => setHoveredDay(null)}
+                    onFocus={() => setHoveredDay(day)}
+                    onMouseEnter={() => setHoveredDay(day)}
+                    onMouseLeave={() => setHoveredDay(null)}
+                    tabIndex={0}
+                  />
+                ) : (
+                  <span className="heatmap-cell empty" key={`empty-${weekIndex}-${dayIndex}`} />
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="heatmap-legend">
+        <span>Less</span>
+        {[0, 1, 2, 3, 4].map((level) => (
+          <i className={`heatmap-cell level-${level}`} key={level} />
+        ))}
+        <span>More</span>
+      </div>
     </div>
   )
 }

@@ -421,4 +421,39 @@ export async function repoRoutes(app: FastifyInstance) {
       })),
     }
   })
+
+  app.get('/activity', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    const end = new Date()
+    const start = new Date(end)
+    start.setUTCDate(start.getUTCDate() - 364)
+    start.setUTCHours(0, 0, 0, 0)
+
+    const commits = await prisma.commit.findMany({
+      where: {
+        repo: { ownerId: user.id },
+        committedAt: { gte: start, lte: end },
+      },
+      select: { committedAt: true },
+    })
+
+    const counts = new Map<string, number>()
+    for (let cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+      counts.set(cursor.toISOString().slice(0, 10), 0)
+    }
+
+    for (const commit of commits) {
+      const day = commit.committedAt.toISOString().slice(0, 10)
+      counts.set(day, (counts.get(day) ?? 0) + 1)
+    }
+
+    return {
+      total: commits.length,
+      days: [...counts.entries()].map(([date, count]) => ({ date, count })),
+    }
+  })
 }

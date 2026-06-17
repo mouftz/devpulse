@@ -44,6 +44,12 @@ type GitHubReview = {
   user: { login: string } | null
 }
 
+type AnalyticsScope = 'all' | 'mine'
+type AnalyticsUser = {
+  username: string
+  giteaUsername: string | null
+}
+
 const getBearerToken = (request: FastifyRequest) => {
   const authorization = request.headers.authorization
   if (authorization?.startsWith('Bearer ')) {
@@ -52,6 +58,14 @@ const getBearerToken = (request: FastifyRequest) => {
 
   return request.cookies.devpulse_token ?? null
 }
+
+const analyticsScope = (scope?: string): AnalyticsScope => (scope === 'all' ? 'all' : 'mine')
+
+const analyticsAuthorIds = (user: AnalyticsUser) =>
+  [...new Set([user.username, user.giteaUsername].filter((value): value is string => Boolean(value)))]
+
+const authorFilter = (scope: AnalyticsScope, user: AnalyticsUser) =>
+  scope === 'mine' ? { authorGithubId: { in: analyticsAuthorIds(user) } } : {}
 
 export async function repoRoutes(app: FastifyInstance) {
   const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
@@ -71,7 +85,7 @@ export async function repoRoutes(app: FastifyInstance) {
 
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, accessToken: true },
+      select: { id: true, username: true, giteaUsername: true, accessToken: true },
     })
 
     if (!user) {
@@ -296,7 +310,11 @@ export async function repoRoutes(app: FastifyInstance) {
     }
 
     const repos = await prisma.repo.findMany({
-      where: { ownerId: user.id },
+      where: {
+        ownerId: user.id,
+        isHidden: false,
+        githubRepoId: { not: { startsWith: 'gitea:' } },
+      },
       select: { id: true, fullName: true },
       orderBy: { fullName: 'asc' },
     })
@@ -342,6 +360,7 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         id: request.params.repoId,
         ownerId: user.id,
+        isHidden: false,
       },
     })
 
@@ -368,6 +387,7 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         fullName: request.query.fullName,
         ownerId: user.id,
+        isHidden: false,
       },
       select: { id: true, fullName: true },
     })
@@ -379,7 +399,7 @@ export async function repoRoutes(app: FastifyInstance) {
     return syncRepo(user, repo)
   })
 
-  app.get<{ Params: { repoId: string } }>('/repos/:repoId/summary', async (request, reply) => {
+  app.delete<{ Params: { repoId: string } }>('/repos/:repoId', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
       return
@@ -389,6 +409,35 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         id: request.params.repoId,
         ownerId: user.id,
+        isHidden: false,
+      },
+      select: { id: true, fullName: true },
+    })
+
+    if (!repo) {
+      return reply.code(404).send({ error: 'Repo not found' })
+    }
+
+    await prisma.repo.update({
+      where: { id: repo.id },
+      data: { isHidden: true },
+    })
+
+    return { repo, removed: true }
+  })
+
+  app.get<{ Params: { repoId: string }; Querystring: { scope?: string } }>('/repos/:repoId/summary', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+    const scope = analyticsScope(request.query.scope)
+
+    const repo = await prisma.repo.findFirst({
+      where: {
+        id: request.params.repoId,
+        ownerId: user.id,
+        isHidden: false,
       },
       select: {
         id: true,
@@ -403,12 +452,13 @@ export async function repoRoutes(app: FastifyInstance) {
     }
 
     const [commitCount, pullRequestCount, mergedPullRequests] = await Promise.all([
-      prisma.commit.count({ where: { repoId: repo.id } }),
-      prisma.pullRequest.count({ where: { repoId: repo.id } }),
+      prisma.commit.count({ where: { repoId: repo.id, ...authorFilter(scope, user) } }),
+      prisma.pullRequest.count({ where: { repoId: repo.id, ...authorFilter(scope, user) } }),
       prisma.pullRequest.findMany({
         where: {
           repoId: repo.id,
           mergedAt: { not: null },
+          ...authorFilter(scope, user),
         },
         select: {
           openedAt: true,
@@ -443,12 +493,13 @@ export async function repoRoutes(app: FastifyInstance) {
 
   app.get<{
     Params: { repoId: string }
-    Querystring: { days?: string }
+    Querystring: { days?: string; scope?: string }
   }>('/repos/:repoId/pr-cycle', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
       return
     }
+    const scope = analyticsScope(request.query.scope)
 
     const dayCount = Math.min(Math.max(Number(request.query.days ?? 365), 7), 365)
     const end = new Date()
@@ -460,6 +511,7 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         id: request.params.repoId,
         ownerId: user.id,
+        isHidden: false,
       },
       select: { id: true },
     })
@@ -472,6 +524,7 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         repoId: repo.id,
         mergedAt: { not: null, gte: start, lte: end },
+        ...authorFilter(scope, user),
       },
       select: {
         openedAt: true,
@@ -524,12 +577,13 @@ export async function repoRoutes(app: FastifyInstance) {
 
   app.get<{
     Params: { repoId: string }
-    Querystring: { days?: string }
+    Querystring: { days?: string; scope?: string }
   }>('/repos/:repoId/review-latency', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
       return
     }
+    const scope = analyticsScope(request.query.scope)
 
     const dayCount = Math.min(Math.max(Number(request.query.days ?? 90), 7), 365)
     const end = new Date()
@@ -553,6 +607,7 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         repoId: repo.id,
         openedAt: { gte: start, lte: end },
+        ...authorFilter(scope, user),
         reviews: { some: { timeToReviewMins: { not: null } } },
       },
       select: {
@@ -605,11 +660,65 @@ export async function repoRoutes(app: FastifyInstance) {
     }
   })
 
-  app.get('/overview', async (request, reply) => {
+  app.get<{ Querystring: { scope?: string } }>('/overview', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
       return
     }
+    const scope = analyticsScope(request.query.scope)
+
+    const repos = await prisma.repo.findMany({
+      where: { ownerId: user.id, isHidden: false },
+      select: {
+        id: true,
+        githubRepoId: true,
+        fullName: true,
+        lastSyncedAt: true,
+      },
+      orderBy: { lastSyncedAt: 'desc' },
+    })
+
+    const reposWithCounts = await Promise.all(
+      repos.map(async (repo) => {
+        const [commits, pullRequests] = await Promise.all([
+          prisma.commit.count({ where: { repoId: repo.id, ...authorFilter(scope, user) } }),
+          prisma.pullRequest.count({ where: { repoId: repo.id, ...authorFilter(scope, user) } }),
+        ])
+
+        return { ...repo, commits, pullRequests }
+      }),
+    )
+
+    const totals = reposWithCounts.reduce(
+      (summary, repo) => ({
+        repos: summary.repos + 1,
+        syncedRepos: summary.syncedRepos + (repo.lastSyncedAt ? 1 : 0),
+        commits: summary.commits + repo.commits,
+        pullRequests: summary.pullRequests + repo.pullRequests,
+      }),
+      { repos: 0, syncedRepos: 0, commits: 0, pullRequests: 0 },
+    )
+
+    return {
+      scope,
+      totals,
+      repos: reposWithCounts.map((repo) => ({
+        id: repo.id,
+        provider: repo.githubRepoId.startsWith('gitea:') ? 'gitea' : 'github',
+        fullName: repo.fullName,
+        lastSyncedAt: repo.lastSyncedAt,
+        commits: repo.commits,
+        pullRequests: repo.pullRequests,
+      })),
+    }
+  })
+
+  app.get<{ Querystring: { scope?: string } }>('/repos/manage', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+    const scope = analyticsScope(request.query.scope)
 
     const repos = await prisma.repo.findMany({
       where: { ownerId: user.id },
@@ -617,47 +726,101 @@ export async function repoRoutes(app: FastifyInstance) {
         id: true,
         githubRepoId: true,
         fullName: true,
+        isHidden: true,
         lastSyncedAt: true,
-        _count: {
-          select: {
-            commits: true,
-            pullRequests: true,
-          },
-        },
       },
-      orderBy: { lastSyncedAt: 'desc' },
+      orderBy: [{ isHidden: 'asc' }, { fullName: 'asc' }],
     })
 
-    const totals = repos.reduce(
-      (summary, repo) => ({
-        repos: summary.repos + 1,
-        syncedRepos: summary.syncedRepos + (repo.lastSyncedAt ? 1 : 0),
-        commits: summary.commits + repo._count.commits,
-        pullRequests: summary.pullRequests + repo._count.pullRequests,
+    const reposWithCounts = await Promise.all(
+      repos.map(async (repo) => {
+        const [commits, pullRequests] = await Promise.all([
+          prisma.commit.count({ where: { repoId: repo.id, ...authorFilter(scope, user) } }),
+          prisma.pullRequest.count({ where: { repoId: repo.id, ...authorFilter(scope, user) } }),
+        ])
+
+        return { ...repo, commits, pullRequests }
       }),
-      { repos: 0, syncedRepos: 0, commits: 0, pullRequests: 0 },
     )
 
     return {
-      totals,
-      repos: repos.map((repo) => ({
+      repos: reposWithCounts.map((repo) => ({
         id: repo.id,
         provider: repo.githubRepoId.startsWith('gitea:') ? 'gitea' : 'github',
         fullName: repo.fullName,
+        isHidden: repo.isHidden,
         lastSyncedAt: repo.lastSyncedAt,
-        commits: repo._count.commits,
-        pullRequests: repo._count.pullRequests,
+        commits: repo.commits,
+        pullRequests: repo.pullRequests,
       })),
     }
   })
 
+  const updateRepoVisibility = async (
+    user: Awaited<ReturnType<typeof authenticate>>,
+    repoId: string,
+    isHidden: boolean,
+    reply: FastifyReply,
+  ) => {
+    if (!user) {
+      return
+    }
+
+    const repo = await prisma.repo.findFirst({
+      where: {
+        id: repoId,
+        ownerId: user.id,
+      },
+      select: { id: true, fullName: true },
+    })
+
+    if (!repo) {
+      return reply.code(404).send({ error: 'Repo not found' })
+    }
+
+    const updated = await prisma.repo.update({
+      where: { id: repo.id },
+      data: { isHidden },
+      select: { id: true, fullName: true, isHidden: true },
+    })
+
+    return { repo: updated }
+  }
+
+  const visibilityHandler = async (
+    request: FastifyRequest<{ Params: { repoId: string }; Body: { isHidden?: boolean } }>,
+    reply: FastifyReply,
+  ) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    if (typeof request.body.isHidden !== 'boolean') {
+      return reply.code(400).send({ error: 'isHidden boolean is required' })
+    }
+
+    return updateRepoVisibility(user, request.params.repoId, request.body.isHidden, reply)
+  }
+
+  app.patch<{
+    Params: { repoId: string }
+    Body: { isHidden?: boolean }
+  }>('/repos/:repoId/visibility', visibilityHandler)
+
+  app.post<{
+    Params: { repoId: string }
+    Body: { isHidden?: boolean }
+  }>('/repos/:repoId/visibility', visibilityHandler)
+
   app.get<{
-    Querystring: { repoId?: string; days?: string }
+    Querystring: { repoId?: string; days?: string; scope?: string }
   }>('/activity', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
       return
     }
+    const scope = analyticsScope(request.query.scope)
 
     const dayCount = Math.min(Math.max(Number(request.query.days ?? 365), 1), 365)
     const end = new Date()
@@ -670,6 +833,7 @@ export async function repoRoutes(app: FastifyInstance) {
         where: {
           id: request.query.repoId,
           ownerId: user.id,
+          isHidden: false,
         },
         select: { id: true },
       })
@@ -683,8 +847,10 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         repo: {
           ownerId: user.id,
+          isHidden: false,
           ...(request.query.repoId ? { id: request.query.repoId } : {}),
         },
+        ...authorFilter(scope, user),
         committedAt: { gte: start, lte: end },
       },
       select: { committedAt: true },

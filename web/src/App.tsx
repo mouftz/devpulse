@@ -8,8 +8,12 @@ import {
   Github,
   LogOut,
   Loader2,
+  Search,
+  Settings2,
   RefreshCw,
   ShieldCheck,
+  Trash2,
+  X,
 } from 'lucide-react'
 
 const API_URL = 'http://localhost:3000'
@@ -18,6 +22,7 @@ type User = {
   id: string
   githubId: string
   username: string
+  giteaUsername: string | null
   email: string
   avatarUrl: string | null
 }
@@ -39,8 +44,18 @@ type Overview = {
   }>
 }
 
+type ManagerRepo = Overview['repos'][number] & {
+  isHidden: boolean
+}
+
 type ActivityDay = {
   date: string
+  count: number
+}
+
+type ChartBucket = {
+  key: string
+  label: string
   count: number
 }
 
@@ -84,8 +99,46 @@ type ReviewLatency = {
   }>
 }
 
+type SyncAllResult = {
+  total: number
+  synced: number
+  failed: number
+  results?: Array<{
+    status: 'synced' | 'failed'
+    repo?: {
+      id: string
+      fullName: string
+    }
+    error?: string
+  }>
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type RepoSort = 'recent' | 'commits' | 'unsynced'
+type RangeDays = 30 | 90 | 365
+type AnalyticsScope = 'mine' | 'all'
+
+const errorMessage = (error: unknown) => {
+  if (!(error instanceof Error)) return 'Something went wrong.'
+  try {
+    const parsed = JSON.parse(error.message) as { error?: string; message?: string }
+    return parsed.error ?? parsed.message ?? error.message
+  } catch {
+    return error.message
+  }
+}
+
+const syncFailures = (provider: string, result: SyncAllResult) =>
+  result.results
+    ?.filter((entry) => entry.status === 'failed')
+    .map((entry) => `${provider}: ${entry.repo?.fullName ?? 'unknown repo'}${entry.error ? ` (${entry.error})` : ''}`) ?? []
+
+const failedSyncResult = (error: unknown): SyncAllResult => ({
+  total: 0,
+  synced: 0,
+  failed: 1,
+  results: [{ status: 'failed', error: errorMessage(error) }],
+})
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
   const response = await fetch(`${API_URL}${path}`, {
@@ -120,9 +173,16 @@ export function App() {
   const [prCycle, setPrCycle] = useState<PrCycleTrend | null>(null)
   const [reviewLatency, setReviewLatency] = useState<ReviewLatency | null>(null)
   const [repoSort, setRepoSort] = useState<RepoSort>('recent')
+  const [rangeDays, setRangeDays] = useState<RangeDays>(365)
+  const [analyticsScope, setAnalyticsScope] = useState<AnalyticsScope>('mine')
   const [state, setState] = useState<LoadState>('idle')
   const [syncing, setSyncing] = useState(false)
   const [syncingRepoId, setSyncingRepoId] = useState<string | null>(null)
+  const [removingRepoId, setRemovingRepoId] = useState<string | null>(null)
+  const [managerOpen, setManagerOpen] = useState(false)
+  const [managerRepos, setManagerRepos] = useState<ManagerRepo[]>([])
+  const [managerLoading, setManagerLoading] = useState(false)
+  const [managerQuery, setManagerQuery] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
 
   const load = async () => {
@@ -133,8 +193,8 @@ export function App() {
 
       await Promise.all([api('/github/repos'), api('/gitea/repos').catch(() => null)])
       const [nextOverview, nextActivity] = await Promise.all([
-        api<Overview>('/github/overview'),
-        api<ActivitySummary>('/github/activity'),
+        api<Overview>(`/github/overview?scope=${analyticsScope}`),
+        api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
       ])
       setOverview(nextOverview)
       setActivity(nextActivity)
@@ -155,7 +215,7 @@ export function App() {
 
   useEffect(() => {
     void load()
-  }, [])
+  }, [rangeDays, analyticsScope])
 
   const topRepos = useMemo(() => {
     return [...(overview?.repos ?? [])].sort((a, b) => b.commits - a.commits).slice(0, 5)
@@ -185,6 +245,12 @@ export function App() {
     return overview?.repos.find((repo) => repo.id === selectedRepoId) ?? null
   }, [overview, selectedRepoId])
 
+  const filteredManagerRepos = useMemo(() => {
+    const query = managerQuery.trim().toLowerCase()
+    if (!query) return managerRepos
+    return managerRepos.filter((repo) => repo.fullName.toLowerCase().includes(query) || repo.provider.includes(query))
+  }, [managerQuery, managerRepos])
+
   useEffect(() => {
     if (!selectedRepoId) {
       setRepoSummary(null)
@@ -195,10 +261,10 @@ export function App() {
     }
 
     void Promise.all([
-      api<RepoSummary>(`/github/repos/${selectedRepoId}/summary`),
-      api<ActivitySummary>(`/github/activity?repoId=${selectedRepoId}&days=30`),
-      api<PrCycleTrend>(`/github/repos/${selectedRepoId}/pr-cycle?days=90`),
-      api<ReviewLatency>(`/github/repos/${selectedRepoId}/review-latency?days=90`),
+      api<RepoSummary>(`/github/repos/${selectedRepoId}/summary?scope=${analyticsScope}`),
+      api<ActivitySummary>(`/github/activity?repoId=${selectedRepoId}&days=${rangeDays}&scope=${analyticsScope}`),
+      api<PrCycleTrend>(`/github/repos/${selectedRepoId}/pr-cycle?days=${rangeDays}&scope=${analyticsScope}`),
+      api<ReviewLatency>(`/github/repos/${selectedRepoId}/review-latency?days=${rangeDays}&scope=${analyticsScope}`),
     ])
       .then(([nextSummary, nextActivity, nextPrCycle, nextReviewLatency]) => {
         setRepoSummary(nextSummary)
@@ -212,7 +278,7 @@ export function App() {
         setPrCycle(null)
         setReviewLatency(null)
       })
-  }, [selectedRepoId])
+  }, [selectedRepoId, rangeDays, analyticsScope])
 
   const connectGitHub = () => {
     window.location.href = `${API_URL}/auth/github`
@@ -223,18 +289,25 @@ export function App() {
     setNotice(null)
     try {
       const [githubResult, giteaResult] = await Promise.all([
-        api<{ synced: number; failed: number }>('/github/repos/sync-all'),
-        api<{ synced: number; failed: number }>('/gitea/repos/sync-all').catch(() => ({ synced: 0, failed: 0 })),
+        api<SyncAllResult>('/github/repos/sync-all').catch(failedSyncResult),
+        api<SyncAllResult>('/gitea/repos/sync-all').catch(failedSyncResult),
       ])
       const [nextOverview, nextActivity] = await Promise.all([
-        api<Overview>('/github/overview'),
-        api<ActivitySummary>('/github/activity'),
+        api<Overview>(`/github/overview?scope=${analyticsScope}`),
+        api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
       ])
       setOverview(nextOverview)
       setActivity(nextActivity)
       const synced = githubResult.synced + giteaResult.synced
       const failed = githubResult.failed + giteaResult.failed
-      setNotice(`Synced ${synced} repos${failed ? `, ${failed} failed` : ''}.`)
+      const failures = [...syncFailures('github', githubResult), ...syncFailures('gitea', giteaResult)]
+      setNotice(
+        failed
+          ? `Synced ${synced} repositories. ${failed} failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '; more in API logs' : ''}.`
+          : `Synced ${synced} repositories.`,
+      )
+    } catch (error) {
+      setNotice(`Sync refresh failed: ${errorMessage(error)}`)
     } finally {
       setSyncing(false)
     }
@@ -248,12 +321,12 @@ export function App() {
       await api(`/${repo?.provider ?? 'github'}/repos/${repoId}/sync`, { method: 'POST' })
       const [nextOverview, nextActivity, nextRepoActivity, nextSummary, nextPrCycle, nextReviewLatency] =
         await Promise.all([
-          api<Overview>('/github/overview'),
-          api<ActivitySummary>('/github/activity'),
-          api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=30`),
-          api<RepoSummary>(`/github/repos/${repoId}/summary`),
-          api<PrCycleTrend>(`/github/repos/${repoId}/pr-cycle?days=90`),
-          api<ReviewLatency>(`/github/repos/${repoId}/review-latency?days=90`),
+          api<Overview>(`/github/overview?scope=${analyticsScope}`),
+          api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
+          api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=${rangeDays}&scope=${analyticsScope}`),
+          api<RepoSummary>(`/github/repos/${repoId}/summary?scope=${analyticsScope}`),
+          api<PrCycleTrend>(`/github/repos/${repoId}/pr-cycle?days=${rangeDays}&scope=${analyticsScope}`),
+          api<ReviewLatency>(`/github/repos/${repoId}/review-latency?days=${rangeDays}&scope=${analyticsScope}`),
         ])
       setOverview(nextOverview)
       setActivity(nextActivity)
@@ -263,9 +336,69 @@ export function App() {
       setReviewLatency(nextReviewLatency)
       setSelectedRepoId(repoId)
       setNotice(`Synced ${nextSummary.repo.fullName}.`)
+    } catch (error) {
+      setNotice(`Could not sync ${repo?.provider ?? 'repository'} ${repo?.fullName ?? repoId}: ${errorMessage(error)}`)
     } finally {
       setSyncingRepoId(null)
     }
+  }
+
+  const loadManagerRepos = async () => {
+    setManagerLoading(true)
+    try {
+      const response = await api<{ repos: ManagerRepo[] }>(`/github/repos/manage?scope=${analyticsScope}`)
+      setManagerRepos(response.repos)
+    } finally {
+      setManagerLoading(false)
+    }
+  }
+
+  const openManager = () => {
+    setManagerOpen(true)
+    void loadManagerRepos()
+  }
+
+  const setRepoVisibility = async (repoId: string, isHidden: boolean) => {
+    const repo = managerRepos.find((candidate) => candidate.id === repoId)
+    if (!repo) return
+    const previousManagerRepos = managerRepos
+
+    setRemovingRepoId(repoId)
+    setNotice(null)
+    setManagerRepos((repos) =>
+      repos.map((candidate) => (candidate.id === repoId ? { ...candidate, isHidden } : candidate)),
+    )
+    try {
+      await api(`/github/repos/${repoId}/visibility`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isHidden }),
+      })
+      const [nextOverview, nextActivity] = await Promise.all([
+        api<Overview>(`/github/overview?scope=${analyticsScope}`),
+        api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
+        loadManagerRepos(),
+      ])
+      setOverview(nextOverview)
+      setActivity(nextActivity)
+
+      if (isHidden && selectedRepoId === repoId) {
+        const nextSelected = nextOverview.repos.find((candidate) => candidate.lastSyncedAt)?.id ?? nextOverview.repos[0]?.id ?? null
+        setSelectedRepoId(nextSelected)
+      }
+
+      setNotice(`${isHidden ? 'Hid' : 'Restored'} ${repo.fullName}.`)
+    } catch (error) {
+      setManagerRepos(previousManagerRepos)
+      setNotice(error instanceof Error ? error.message : 'Could not update repo visibility.')
+    } finally {
+      setRemovingRepoId(null)
+    }
+  }
+
+  const closeManager = () => {
+    setManagerOpen(false)
+    setManagerQuery('')
   }
 
   const logout = async () => {
@@ -282,6 +415,8 @@ export function App() {
   }
 
   const totals = overview?.totals ?? { repos: 0, syncedRepos: 0, commits: 0, pullRequests: 0 }
+  const rangeLabel = rangeDays === 365 ? 'the last year' : `the last ${rangeDays} days`
+  const scopeLabel = analyticsScope === 'mine' ? 'your activity' : 'all contributors'
 
   return (
     <main className="app-shell">
@@ -332,6 +467,12 @@ export function App() {
                   Add Gitea
                 </button>
               ) : null}
+              {user ? (
+                <button className="secondary-button" onClick={openManager}>
+                  <Settings2 size={18} />
+                  Manage Repos
+                </button>
+              ) : null}
               <button className="secondary-button" onClick={load}>
                 <RefreshCw size={18} />
                 Refresh
@@ -372,9 +513,33 @@ export function App() {
           <div className="section-title">
             <div>
               <p className="eyebrow">Commit Rhythm</p>
-              <h2>{activity?.total ?? 0} contributions in the last year</h2>
+              <h2>{activity?.total ?? 0} contributions in {rangeLabel}</h2>
             </div>
-            <span className="subtle-label">Commits</span>
+            <div className="range-tools">
+              <span className="subtle-label">{scopeLabel}</span>
+              <div className="segmented-control compact-control" aria-label="Contribution scope">
+                {(['mine', 'all'] as const).map((scope) => (
+                  <button
+                    className={analyticsScope === scope ? 'active' : ''}
+                    key={scope}
+                    onClick={() => setAnalyticsScope(scope)}
+                  >
+                    {scope === 'mine' ? 'Mine' : 'All'}
+                  </button>
+                ))}
+              </div>
+              <div className="segmented-control compact-control" aria-label="Dashboard date range">
+                {([30, 90, 365] as const).map((days) => (
+                  <button
+                    className={rangeDays === days ? 'active' : ''}
+                    key={days}
+                    onClick={() => setRangeDays(days)}
+                  >
+                    {days === 365 ? '1y' : `${days}d`}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
           <ContributionGraph days={activity?.days ?? []} />
         </section>
@@ -516,7 +681,7 @@ export function App() {
           {selectedRepo ? (
             <div className="mini-chart-block">
               <div>
-                <span className="subtle-label">Last 30 days</span>
+                <span className="subtle-label">{rangeDays === 365 ? 'Last year' : `Last ${rangeDays} days`}</span>
                 <strong>{repoActivity?.total ?? 0} commits</strong>
               </div>
               <MiniActivityChart days={repoActivity?.days ?? []} />
@@ -546,6 +711,69 @@ export function App() {
           ) : null}
         </section>
       </section>
+
+      {managerOpen ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeManager}>
+          <section className="glass-panel repo-manager" role="dialog" aria-modal="true" aria-label="Manage repositories" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="section-title">
+              <div>
+                <p className="eyebrow">Manage Repos</p>
+                <h2>Choose what DevPulse tracks</h2>
+              </div>
+              <button className="icon-button" onClick={closeManager} title="Close manager">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="manager-actions">
+              <button className="primary-button" onClick={syncAll} disabled={syncing || !overview?.repos.length}>
+                {syncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+                Sync All Visible
+              </button>
+              <span className="subtle-label">{managerRepos.filter((repo) => !repo.isHidden).length} visible · {managerRepos.filter((repo) => repo.isHidden).length} hidden</span>
+            </div>
+
+            <label className="manager-search">
+              <Search size={18} />
+              <input
+                value={managerQuery}
+                onChange={(event) => setManagerQuery(event.target.value)}
+                placeholder="Search repos"
+              />
+            </label>
+
+            <div className="manager-list">
+              {managerLoading ? (
+                <div className="empty-state">Loading repositories...</div>
+              ) : filteredManagerRepos.length ? (
+                filteredManagerRepos.map((repo) => (
+                  <div className={`manager-row ${repo.isHidden ? 'is-hidden' : ''}`} key={repo.id}>
+                    <div>
+                      <strong>
+                        <span className={`visibility-dot ${repo.isHidden ? 'off' : 'on'}`} />
+                        {repo.fullName}
+                      </strong>
+                      <span>{repo.provider} · {formatDate(repo.lastSyncedAt)} · {repo.commits} commits · {repo.pullRequests} PRs</span>
+                    </div>
+                    <div className="manager-row-actions">
+                      <button className="secondary-button compact-button" onClick={() => void syncRepo(repo.id)} disabled={repo.isHidden || syncingRepoId === repo.id || removingRepoId === repo.id}>
+                        {syncingRepoId === repo.id ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                        Sync
+                      </button>
+                      <button className={`${repo.isHidden ? 'secondary-button' : 'danger-button'} compact-button`} onClick={() => void setRepoVisibility(repo.id, !repo.isHidden)} disabled={removingRepoId === repo.id || syncingRepoId === repo.id}>
+                        {removingRepoId === repo.id ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                        {repo.isHidden ? 'Show' : 'Hide'}
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-state">{managerQuery ? 'No repos match that search.' : 'No visible repos to manage.'}</div>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </main>
   )
 }
@@ -618,28 +846,50 @@ function PrCycleChart({ trend }: { trend: PrCycleTrend | null }) {
 }
 
 function MiniActivityChart({ days }: { days: ActivityDay[] }) {
-  const chartDays = useMemo(() => {
-    if (days.length) return days.slice(-30)
+  const chartBuckets = useMemo(() => {
+    const sourceDays = days.length ? days : (() => {
+      const fallback: ActivityDay[] = []
+      const end = new Date()
+      const start = new Date(end)
+      start.setDate(start.getDate() - 29)
+      for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
+        fallback.push({ date: cursor.toISOString().slice(0, 10), count: 0 })
+      }
+      return fallback
+    })()
 
-    const fallback: ActivityDay[] = []
-    const end = new Date()
-    const start = new Date(end)
-    start.setDate(start.getDate() - 29)
-    for (let cursor = new Date(start); cursor <= end; cursor.setDate(cursor.getDate() + 1)) {
-      fallback.push({ date: cursor.toISOString().slice(0, 10), count: 0 })
+    if (sourceDays.length <= 60) {
+      return sourceDays.map((day): ChartBucket => ({
+        key: day.date,
+        label: day.date,
+        count: day.count,
+      }))
     }
-    return fallback
+
+    const bucketSize = Math.ceil(sourceDays.length / 60)
+    const buckets: ChartBucket[] = []
+    for (let index = 0; index < sourceDays.length; index += bucketSize) {
+      const bucketDays = sourceDays.slice(index, index + bucketSize)
+      const first = bucketDays[0]
+      const last = bucketDays[bucketDays.length - 1]
+      buckets.push({
+        key: `${first.date}-${last.date}`,
+        label: first.date === last.date ? first.date : `${first.date} to ${last.date}`,
+        count: bucketDays.reduce((total, day) => total + day.count, 0),
+      })
+    }
+    return buckets
   }, [days])
 
-  const max = Math.max(...chartDays.map((day) => day.count), 1)
+  const max = Math.max(...chartBuckets.map((bucket) => bucket.count), 1)
 
   return (
-    <div className="mini-chart" aria-label="Selected repo commits in the last 30 days">
-      {chartDays.map((day) => (
+    <div className="mini-chart" aria-label="Selected repo commits">
+      {chartBuckets.map((bucket) => (
         <span
-          key={day.date}
-          style={{ height: `${Math.max(8, (day.count / max) * 100)}%` }}
-          title={`${day.count} commits on ${day.date}`}
+          key={bucket.key}
+          style={{ height: `${Math.max(8, (bucket.count / max) * 100)}%` }}
+          title={`${bucket.count} commits, ${bucket.label}`}
         />
       ))}
     </div>

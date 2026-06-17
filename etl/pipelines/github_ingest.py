@@ -1,37 +1,37 @@
 """
-DevPulse ETL pipeline — run nightly via cron or Celery beat.
+DevPulse ETL pipeline — run continuously in the worker container.
 
 Flow:
   1. Pull all repos from Postgres that are due for a sync
   2. Fetch commits + PRs from GitHub REST API
   3. Upsert into Postgres (transactional)
-  4. Stream transformed rows to BigQuery for historical analytics
-  5. Enqueue ML scoring job in Redis for each synced repo
+  4. Enqueue ML scoring job in Redis for each synced repo
 """
 
+import argparse
 import os, asyncio, json, logging
-from datetime import datetime, timezone
-from typing import Generator
 import psycopg2, psycopg2.extras, redis, httpx
 
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 REDIS_URL    = os.getenv("REDIS_URL", "redis://redis:6379")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+SYNC_INTERVAL_SECONDS = int(os.getenv("SYNC_INTERVAL_SECONDS", "86400"))
+RUN_ON_START = os.getenv("RUN_ON_START", "true").lower() != "false"
 
-GH_HEADERS = {
-    "Authorization": f"Bearer {GITHUB_TOKEN}",
-    "Accept":        "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-}
+def github_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
 
 # ── GitHub helpers ─────────────────────────────────────────────────────────────
-async def paginate(client: httpx.AsyncClient, url: str) -> list[dict]:
+async def paginate(client: httpx.AsyncClient, url: str, token: str) -> list[dict]:
     """Follow GitHub's link-header pagination and collect all pages."""
     results = []
     while url:
-        r = await client.get(url, headers=GH_HEADERS)
+        r = await client.get(url, headers=github_headers(token))
         r.raise_for_status()
         results.extend(r.json())
         url = r.links.get("next", {}).get("url")
@@ -45,8 +45,9 @@ def get_repos_due_for_sync(conn) -> list[dict]:
         SELECT id, github_repo_id, full_name, owner_id,
                (SELECT access_token FROM users WHERE id = owner_id) AS token
         FROM repos
-        WHERE last_synced_at IS NULL
-           OR last_synced_at < NOW() - INTERVAL '23 hours'
+        WHERE (last_synced_at IS NULL
+           OR last_synced_at < NOW() - INTERVAL '23 hours')
+          AND github_repo_id NOT LIKE 'gitea:%'
         ORDER BY last_synced_at ASC NULLS FIRST
         LIMIT 50
     """)
@@ -106,6 +107,9 @@ def enqueue_ml_score(repo_id: str, owner_id: str):
 
 # ── Main ETL loop ──────────────────────────────────────────────────────────────
 async def run():
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is required")
+
     conn = psycopg2.connect(DATABASE_URL)
     repos = get_repos_due_for_sync(conn)
     logger.info(f"Syncing {len(repos)} repos")
@@ -114,20 +118,26 @@ async def run():
         for repo in repos:
             full_name = repo["full_name"]
             repo_id   = str(repo["id"])
+            token = repo["token"]
             logger.info(f"  → {full_name}")
 
             try:
+                if not token:
+                    raise RuntimeError("Repo owner has no GitHub access token")
+
                 # Commits (last 100 — paginate further if needed)
                 commits = await paginate(
                     client,
-                    f"https://api.github.com/repos/{full_name}/commits?per_page=100"
+                    f"https://api.github.com/repos/{full_name}/commits?per_page=100",
+                    token,
                 )
                 upsert_commits(conn, repo_id, commits)
 
                 # Pull requests
                 prs = await paginate(
                     client,
-                    f"https://api.github.com/repos/{full_name}/pulls?state=all&per_page=100"
+                    f"https://api.github.com/repos/{full_name}/pulls?state=all&per_page=100",
+                    token,
                 )
                 upsert_pull_requests(conn, repo_id, prs)
 
@@ -142,6 +152,19 @@ async def run():
     conn.close()
     logger.info("ETL complete")
 
+async def run_forever():
+    if RUN_ON_START:
+        await run()
+
+    while True:
+        logger.info(f"Next ETL sync in {SYNC_INTERVAL_SECONDS} seconds")
+        await asyncio.sleep(SYNC_INTERVAL_SECONDS)
+        await run()
+
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--once", action="store_true", help="Run one sync cycle and exit")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(run())
+    asyncio.run(run() if args.once else run_forever())

@@ -40,6 +40,11 @@ type GiteaReview = {
   user?: { login?: string; username?: string } | null
 }
 
+type GiteaUser = {
+  login?: string
+  username?: string
+}
+
 const getBearerToken = (request: FastifyRequest) => {
   const authorization = request.headers.authorization
   if (authorization?.startsWith('Bearer ')) {
@@ -71,6 +76,7 @@ const giteaHeaders = () => {
 
 const providerRepoId = (id: number) => `gitea:${id}`
 const providerCommitSha = (repoId: string, sha: string) => `gitea:${repoId}:${sha}`
+const giteaIdentity = (user?: { login?: string; username?: string } | null) => user?.login ?? user?.username ?? null
 
 const giteaMergedAt = (pullRequest: GiteaPullRequest) => {
   const mergedAt = pullRequest.merged_at || (pullRequest.merged || pullRequest.state === 'merged' ? pullRequest.closed_at : null)
@@ -153,12 +159,12 @@ export async function giteaRoutes(app: FastifyInstance) {
             create: {
               repoId: repo.id,
               sha: providerCommitSha(repo.id, commit.sha),
-              authorGithubId: commit.author?.login ?? commit.author?.username ?? 'ghost',
+              authorGithubId: giteaIdentity(commit.author) ?? 'ghost',
               message: commit.commit.message,
               committedAt: new Date(commit.commit.committer.date),
             },
             update: {
-              authorGithubId: commit.author?.login ?? commit.author?.username ?? 'ghost',
+              authorGithubId: giteaIdentity(commit.author) ?? 'ghost',
               message: commit.commit.message,
               committedAt: new Date(commit.commit.committer.date),
             },
@@ -180,7 +186,7 @@ export async function giteaRoutes(app: FastifyInstance) {
               githubPrNumber: pullRequest.number,
               title: pullRequest.title,
               state: giteaState(pullRequest),
-              authorGithubId: pullRequest.user?.login ?? pullRequest.user?.username ?? 'ghost',
+              authorGithubId: giteaIdentity(pullRequest.user) ?? 'ghost',
               openedAt: new Date(pullRequest.created_at),
               mergedAt: giteaMergedAt(pullRequest),
               closedAt: pullRequest.closed_at ? new Date(pullRequest.closed_at) : null,
@@ -188,7 +194,7 @@ export async function giteaRoutes(app: FastifyInstance) {
             update: {
               title: pullRequest.title,
               state: giteaState(pullRequest),
-              authorGithubId: pullRequest.user?.login ?? pullRequest.user?.username ?? 'ghost',
+              authorGithubId: giteaIdentity(pullRequest.user) ?? 'ghost',
               openedAt: new Date(pullRequest.created_at),
               ...(giteaMergedAt(pullRequest) ? { mergedAt: giteaMergedAt(pullRequest) } : {}),
               closedAt: pullRequest.closed_at ? new Date(pullRequest.closed_at) : null,
@@ -216,13 +222,13 @@ export async function giteaRoutes(app: FastifyInstance) {
               create: {
                 id: `gitea:${savedPullRequest.id}:${review.id}`,
                 prId: savedPullRequest.id,
-                reviewerGithubId: review.user?.login ?? review.user?.username ?? 'ghost',
+                reviewerGithubId: giteaIdentity(review.user) ?? 'ghost',
                 state: review.state.toLowerCase(),
                 timeToReviewMins,
                 submittedAt,
               },
               update: {
-                reviewerGithubId: review.user?.login ?? review.user?.username ?? 'ghost',
+                reviewerGithubId: giteaIdentity(review.user) ?? 'ghost',
                 state: review.state.toLowerCase(),
                 timeToReviewMins,
                 submittedAt,
@@ -257,6 +263,20 @@ export async function giteaRoutes(app: FastifyInstance) {
     const user = await authenticate(request, reply)
     if (!user) {
       return
+    }
+
+    const giteaUser = await got
+      .get(`${giteaApiUrl()}/user`, {
+        headers: giteaHeaders(),
+      })
+      .json<GiteaUser>()
+    const giteaUsername = giteaIdentity(giteaUser)
+
+    if (giteaUsername) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { giteaUsername },
+      })
     }
 
     const repos = await got
@@ -309,6 +329,7 @@ export async function giteaRoutes(app: FastifyInstance) {
       where: {
         ownerId: user.id,
         githubRepoId: { startsWith: 'gitea:' },
+        isHidden: false,
       },
       select: { id: true, fullName: true },
       orderBy: { fullName: 'asc' },
@@ -350,6 +371,7 @@ export async function giteaRoutes(app: FastifyInstance) {
         id: request.params.repoId,
         ownerId: user.id,
         githubRepoId: { startsWith: 'gitea:' },
+        isHidden: false,
       },
       select: { id: true, fullName: true },
     })
@@ -359,5 +381,32 @@ export async function giteaRoutes(app: FastifyInstance) {
     }
 
     return syncRepo(repo)
+  })
+
+  app.delete<{ Params: { repoId: string } }>('/repos/:repoId', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    const repo = await prisma.repo.findFirst({
+      where: {
+        id: request.params.repoId,
+        ownerId: user.id,
+        githubRepoId: { startsWith: 'gitea:' },
+      },
+      select: { id: true, fullName: true },
+    })
+
+    if (!repo) {
+      return reply.code(404).send({ error: 'Gitea repo not found' })
+    }
+
+    await prisma.repo.update({
+      where: { id: repo.id },
+      data: { isHidden: true },
+    })
+
+    return { repo, removed: true }
   })
 }

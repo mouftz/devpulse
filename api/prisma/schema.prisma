@@ -15,6 +15,7 @@ model User {
   githubId     String   @unique @map("github_id")
   email        String   @unique
   username     String
+  giteaUsername String? @map("gitea_username")
   avatarUrl    String?  @map("avatar_url")
   accessToken  String   @map("access_token")  // encrypt before storing
   createdAt    DateTime @default(now()) @map("created_at")
@@ -64,6 +65,7 @@ model Repo {
   fullName      String    @map("full_name")       // "org/repo-name"
   defaultBranch String    @default("main") @map("default_branch")
   isPrivate     Boolean   @default(false) @map("is_private")
+  isHidden      Boolean   @default(false) @map("is_hidden")
   lastSyncedAt  DateTime? @map("last_synced_at")
   createdAt     DateTime  @default(now()) @map("created_at")
 

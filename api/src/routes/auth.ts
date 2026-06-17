@@ -144,6 +144,7 @@ export async function authRoutes(app: FastifyInstance) {
           id: true,
           githubId: true,
           username: true,
+          giteaUsername: true,
           email: true,
           avatarUrl: true,
         },

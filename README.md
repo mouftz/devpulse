@@ -1,7 +1,8 @@
 # DevPulse
 
-DevPulse is a developer analytics app that connects to GitHub, syncs repository
-activity, and turns commits and pull requests into a clean dashboard.
+DevPulse is a developer analytics app that connects to code hosting providers,
+syncs repository activity, and turns commits and pull requests into a clean
+dashboard.
 
 The goal is to make engineering activity easier to understand at a glance:
 which repos are active, how often work is landing, and where team/product
@@ -11,26 +12,29 @@ signals can eventually feed deeper analytics and ML scoring.
 
 - GitHub OAuth login
 - Browser session cookie after login
-- GitHub repository discovery
-- One-click sync for all saved repos
+- GitHub and Gitea repository discovery
+- One-click sync for all visible repositories
 - Commit and pull request ingestion into Postgres
 - Dashboard totals for repos, synced repos, commits, and pull requests
 - GitHub-style contribution heatmap for commit activity
-- Repo table and “most active” ranking
+- Repository table and “most active” ranking
+- Date range controls and `Mine` / `All` contribution scope
+- PR cycle and review latency analytics
+- Repository visibility controls for hiding repos from the dashboard
 
 ## Product Direction
 
 DevPulse is being built as a developer analytics SaaS. The current version is
 focused on proving the core data loop:
 
-1. Connect GitHub.
+1. Connect GitHub or configure Gitea.
 2. Save the authenticated user.
 3. Discover repositories.
 4. Sync commits and pull requests.
 5. Display useful engineering activity in the dashboard.
 
-Next steps are deeper analytics: PR cycle time trends, commit velocity by repo,
-review latency, anomaly detection, and ML-powered burnout risk scoring.
+Next steps are deeper analytics polish, background sync reliability, anomaly
+detection, and ML-powered burnout risk scoring.
 
 ## Tech Stack
 
@@ -81,7 +85,7 @@ npm install
 
 ### 2. Create API Environment File
 
-Create `api/.env`:
+Copy `api/.env.example` to `api/.env`, then fill in your local values:
 
 ```env
 DATABASE_URL=postgresql://devpulse:devpulse_secret@localhost:5433/devpulse_db
@@ -98,6 +102,10 @@ NODE_ENV=development
 ```
 
 Do not commit real secrets.
+
+For Docker Compose, copy the root `.env.example` to `.env` and fill in the
+provider credentials there too. The root `.env` is used by `docker-compose.yml`;
+`api/.env` is used when you run the API directly with Node.
 
 ### 3. Start Postgres and Redis
 
@@ -171,14 +179,20 @@ save the user, set a local session cookie, and redirect back to the frontend.
 | `/auth/me` | GET | Current logged-in user |
 | `/auth/logout` | POST | Clear session cookie |
 | `/github/repos` | GET | Discover and save GitHub repos |
-| `/github/repos/sync-all` | GET/POST | Sync all saved repos |
-| `/github/repos/:repoId/sync` | POST | Sync one repo |
+| `/github/repos/manage` | GET | List visible and hidden repositories |
+| `/github/repos/sync-all` | GET/POST | Sync all visible GitHub repos |
+| `/github/repos/:repoId/sync` | POST | Sync one repository |
+| `/github/repos/:repoId/visibility` | POST/PATCH | Hide or restore a repository |
+| `/github/repos/:repoId` | DELETE | Hide a repository from DevPulse |
 | `/github/repos/:repoId/summary` | GET | Repo-level metrics |
+| `/github/repos/:repoId/pr-cycle` | GET | Weekly PR cycle trend |
+| `/github/repos/:repoId/review-latency` | GET | Weekly review latency trend |
 | `/github/overview` | GET | Dashboard totals and repo list |
 | `/github/activity` | GET | Daily commit counts for the heatmap |
 | `/gitea/repos` | GET | Discover and save Gitea repos |
 | `/gitea/repos/sync-all` | GET/POST | Sync all saved Gitea repos |
-| `/gitea/repos/:repoId/sync` | POST | Sync one Gitea repo |
+| `/gitea/repos/:repoId/sync` | POST | Sync one Gitea repository |
+| `/gitea/repos/:repoId` | DELETE | Hide a Gitea repository from DevPulse |
 
 ## Project Structure
 
@@ -197,8 +211,11 @@ devpulse/
 
 - The frontend expects the API at `http://localhost:3000`.
 - The API sets an HTTP-only `devpulse_token` cookie after GitHub login.
-- The dashboard can sync all repos from the UI.
+- The dashboard can sync all visible repositories from the UI.
 - Gitea support uses `GITEA_BASE_URL` and `GITEA_TOKEN` from `api/.env`.
+- The dashboard defaults to `Mine`, which filters analytics to the connected
+  GitHub username plus the saved Gitea username when available. Use `All` for
+  full repo/team-wide activity.
 - GitHub access tokens are stored in Postgres for local development; production
   should encrypt them before writing to the database.
 - `npm audit` currently reports dependency advisories. Avoid
@@ -208,16 +225,17 @@ devpulse/
 
 ### Analytics
 
-- Per-repo activity charts with commits-over-time line charts.
-- PR cycle time trends that show whether merge time is improving or getting
-  slower.
-- Review latency metrics, especially time from PR open to first review.
-- Repo filtering and a dashboard date range picker.
+- Add richer repository filtering beyond the current sort and `Mine` / `All` scope.
+- Add more detailed per-repo activity charts beyond the compact commit bars.
+- Expand PR cycle and review latency charts with labels, deltas, and drill-downs.
+- Polish Manage Repos later with filter chips, restore-all-hidden, and stronger
+  hidden/visible empty states.
 
 ### Infrastructure
 
-- Background sync jobs. Sync is currently manual; the Redis queue and ETL worker
-  should run scheduled syncs automatically.
+- Harden background sync jobs. The ETL worker now runs on a configurable
+  interval and enqueues ML scoring jobs, but it still needs production-grade
+  retry/backoff and observability.
 - Keep generated OS files out of Git. `.DS_Store` is ignored and should stay
   untracked.
 

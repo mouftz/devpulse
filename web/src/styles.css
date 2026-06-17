@@ -884,12 +884,66 @@ h2 {
   display: block;
 }
 
-.repo-row > div:first-child span,
+.repo-row > div:first-child > span,
 .rank-row p,
 .repo-stats span {
   margin: 4px 0 0;
   color: rgba(246, 247, 251, 0.58);
   font-size: 0.9rem;
+}
+
+.repo-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.repo-row-meta em {
+  max-width: min(42ch, 100%);
+  overflow: hidden;
+  color: rgba(255, 180, 180, 0.82);
+  font-size: 0.78rem;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sync-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 92px;
+  min-height: 24px;
+  padding: 0 12px;
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  line-height: 1;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-align: center;
+  white-space: nowrap;
+  text-transform: uppercase;
+}
+
+.sync-status-pill.idle,
+.sync-status-pill.healthy {
+  color: #bdf7df;
+  background: rgba(126, 224, 192, 0.12);
+}
+
+.sync-status-pill.queued,
+.sync-status-pill.syncing {
+  color: #cfe8ff;
+  background: rgba(77, 171, 247, 0.14);
+}
+
+.sync-status-pill.failed {
+  color: #ffd2d2;
+  background: rgba(255, 120, 120, 0.12);
 }
 
 .repo-stats {
@@ -1059,31 +1113,6 @@ h2 {
 
 .trend-chart-main {
   min-width: 0;
-}
-
-.trend-hover-card {
-  min-height: 56px;
-  margin-bottom: 4px;
-  padding: 8px 10px;
-  color: #f8fafc;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-}
-
-.trend-hover-card strong,
-.trend-hover-card span {
-  display: block;
-}
-
-.trend-hover-card strong {
-  font-size: 0.86rem;
-}
-
-.trend-hover-card span,
-.trend-hover-card.muted {
-  color: rgba(246, 247, 251, 0.58);
-  font-size: 0.82rem;
 }
 
 .trend-chart-header,
@@ -1472,6 +1501,10 @@ h2 {
   margin-top: 3px;
   color: rgba(246, 247, 251, 0.58);
   font-size: 0.86rem;
+}
+
+.manager-meta {
+  margin-top: 8px;
 }
 
 .manager-row strong .visibility-dot {

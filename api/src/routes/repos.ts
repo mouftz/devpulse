@@ -1,6 +1,14 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import got from 'got'
 import prisma from '../db.js'
+import {
+  enqueueRepos,
+  enqueueRepoSync,
+  getQueueDepth,
+  markRepoSyncFailed,
+  markRepoSyncStarted,
+  markRepoSyncSucceeded,
+} from '../lib/sync-queue.js'
 
 type AuthPayload = {
   sub: string
@@ -44,10 +52,31 @@ type GitHubReview = {
   user: { login: string } | null
 }
 
+type GitHubReviewComment = {
+  id: number
+  body: string
+  created_at: string
+  user: { login: string } | null
+}
+
+type GitHubIssueComment = {
+  id: number
+  body: string
+  created_at: string
+  user: { login: string } | null
+}
+
 type AnalyticsScope = 'all' | 'mine'
 type AnalyticsUser = {
   username: string
   giteaUsername: string | null
+}
+
+export type GitHubSyncUser = {
+  id: string
+  username: string
+  giteaUsername: string | null
+  accessToken: string
 }
 
 const getBearerToken = (request: FastifyRequest) => {
@@ -67,66 +96,84 @@ const analyticsAuthorIds = (user: AnalyticsUser) =>
 const authorFilter = (scope: AnalyticsScope, user: AnalyticsUser) =>
   scope === 'mine' ? { authorGithubId: { in: analyticsAuthorIds(user) } } : {}
 
-export async function repoRoutes(app: FastifyInstance) {
-  const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
-    const token = getBearerToken(request)
-    if (!token) {
-      reply.code(401).send({ error: 'Missing bearer token' })
-      return null
-    }
+const githubHeaders = (accessToken: string) => ({
+  Accept: 'application/vnd.github+json',
+  Authorization: `Bearer ${accessToken}`,
+  'X-GitHub-Api-Version': '2022-11-28',
+})
 
-    let payload: AuthPayload
-    try {
-      payload = app.jwt.verify<AuthPayload>(token)
-    } catch {
-      reply.code(401).send({ error: 'Invalid bearer token' })
-      return null
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, username: true, giteaUsername: true, accessToken: true },
-    })
-
-    if (!user) {
-      reply.code(401).send({ error: 'User not found' })
-      return null
-    }
-
-    return user
+const paginateGitHub = async <T>(url: string, accessToken: string, searchParams?: Record<string, string>) => {
+  const results: T[] = []
+  for await (const item of got.paginate<T>(url, {
+    searchParams: {
+      per_page: '100',
+      ...(searchParams ?? {}),
+    },
+    headers: githubHeaders(accessToken),
+    pagination: {
+      transform: (response) => JSON.parse(String(response.body)) as T[],
+      paginate: ({ response }) => {
+        const linkHeader = Array.isArray(response.headers.link)
+          ? response.headers.link.join(',')
+          : response.headers.link ?? ''
+        const next = linkHeader
+          .split(',')
+          .map((part: string) => part.trim())
+          .find((part: string) => part.includes('rel="next"'))
+          ?.match(/<([^>]+)>/)?.[1]
+        return next ? { url: next } : false
+      },
+    },
+  })) {
+    results.push(item)
   }
+  return results
+}
 
-  const syncRepo = async (user: { id: string; accessToken: string }, repo: { id: string; fullName: string }) => {
-    const headers = {
-      Accept: 'application/vnd.github+json',
-      Authorization: `Bearer ${user.accessToken}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-    }
+export const syncGitHubRepo = async (
+  user: GitHubSyncUser,
+  repo: { id: string; fullName: string },
+) => {
+  await markRepoSyncStarted(repo.id)
 
-    const commits = await got
-      .get(`https://api.github.com/repos/${repo.fullName}/commits`, {
-        searchParams: { per_page: '100' },
-        headers,
-      })
-      .json<GitHubCommit[]>()
-
-    const pullRequests = await got
-      .get(`https://api.github.com/repos/${repo.fullName}/pulls`, {
-        searchParams: { state: 'all', per_page: '100' },
-        headers,
-      })
-      .json<GitHubPullRequest[]>()
-
+  try {
+    const commits = await paginateGitHub<GitHubCommit>(
+      `https://api.github.com/repos/${repo.fullName}/commits`,
+      user.accessToken,
+    )
+    const pullRequests = await paginateGitHub<GitHubPullRequest>(
+      `https://api.github.com/repos/${repo.fullName}/pulls`,
+      user.accessToken,
+      { state: 'all' },
+    )
     const reviewsByPr = new Map<number, GitHubReview[]>()
+    const reviewCommentsByPr = new Map<number, GitHubReviewComment[]>()
+    const issueCommentsByPr = new Map<number, GitHubIssueComment[]>()
+
     await Promise.all(
       pullRequests.map(async (pullRequest) => {
         try {
-          const reviews = await got
-            .get(`https://api.github.com/repos/${repo.fullName}/pulls/${pullRequest.number}/reviews`, { headers })
-            .json<GitHubReview[]>()
+          const [reviews, reviewComments, issueComments] = await Promise.all([
+            paginateGitHub<GitHubReview>(
+              `https://api.github.com/repos/${repo.fullName}/pulls/${pullRequest.number}/reviews`,
+              user.accessToken,
+            ),
+            paginateGitHub<GitHubReviewComment>(
+              `https://api.github.com/repos/${repo.fullName}/pulls/${pullRequest.number}/comments`,
+              user.accessToken,
+            ),
+            paginateGitHub<GitHubIssueComment>(
+              `https://api.github.com/repos/${repo.fullName}/issues/${pullRequest.number}/comments`,
+              user.accessToken,
+            ),
+          ])
           reviewsByPr.set(pullRequest.number, reviews)
+          reviewCommentsByPr.set(pullRequest.number, reviewComments)
+          issueCommentsByPr.set(pullRequest.number, issueComments)
         } catch {
           reviewsByPr.set(pullRequest.number, [])
+          reviewCommentsByPr.set(pullRequest.number, [])
+          issueCommentsByPr.set(pullRequest.number, [])
         }
       }),
     )
@@ -227,17 +274,45 @@ export async function repoRoutes(app: FastifyInstance) {
         }),
       )
 
-      await tx.repo.update({
-        where: { id: repo.id },
-        data: { lastSyncedAt: new Date() },
-      })
+      const savedComments = await Promise.all(
+        savedPullRequests.flatMap((savedPullRequest) => {
+          const reviewComments = reviewCommentsByPr.get(savedPullRequest.githubPrNumber) ?? []
+          const issueComments = issueCommentsByPr.get(savedPullRequest.githubPrNumber) ?? []
+
+          return [...reviewComments, ...issueComments].map((comment) => {
+            const isReviewComment = reviewComments.some((entry) => entry.id === comment.id)
+            return tx.prComment.upsert({
+              where: {
+                id: `github:${savedPullRequest.id}:${isReviewComment ? 'review' : 'issue'}:${comment.id}`,
+              },
+              create: {
+                id: `github:${savedPullRequest.id}:${isReviewComment ? 'review' : 'issue'}:${comment.id}`,
+                prId: savedPullRequest.id,
+                commenterGithubId: comment.user?.login ?? 'ghost',
+                kind: isReviewComment ? 'review' : 'issue',
+                body: comment.body.slice(0, 4000),
+                commentedAt: new Date(comment.created_at),
+              },
+              update: {
+                commenterGithubId: comment.user?.login ?? 'ghost',
+                kind: isReviewComment ? 'review' : 'issue',
+                body: comment.body.slice(0, 4000),
+                commentedAt: new Date(comment.created_at),
+              },
+            })
+          })
+        }),
+      )
 
       return {
         commits: savedCommits.length,
         pullRequests: savedPullRequests.length,
         reviews: savedReviews.length,
+        comments: savedComments.length,
       }
     })
+
+    await markRepoSyncSucceeded(repo.id)
 
     return {
       repo: {
@@ -246,6 +321,39 @@ export async function repoRoutes(app: FastifyInstance) {
       },
       synced,
     }
+  } catch (error) {
+    await markRepoSyncFailed(repo.id, error instanceof Error ? error.message : 'Unknown sync error')
+    throw error
+  }
+}
+
+export async function repoRoutes(app: FastifyInstance) {
+  const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
+    const token = getBearerToken(request)
+    if (!token) {
+      reply.code(401).send({ error: 'Missing bearer token' })
+      return null
+    }
+
+    let payload: AuthPayload
+    try {
+      payload = app.jwt.verify<AuthPayload>(token)
+    } catch {
+      reply.code(401).send({ error: 'Invalid bearer token' })
+      return null
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true, username: true, giteaUsername: true, accessToken: true },
+    })
+
+    if (!user) {
+      reply.code(401).send({ error: 'User not found' })
+      return null
+    }
+
+    return user
   }
 
   app.get('/repos', async (request, reply) => {
@@ -261,11 +369,7 @@ export async function repoRoutes(app: FastifyInstance) {
           per_page: '100',
           sort: 'updated',
         },
-        headers: {
-          Accept: 'application/vnd.github+json',
-          Authorization: `Bearer ${user.accessToken}`,
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
+        headers: githubHeaders(user.accessToken),
       })) {
       githubRepos.push(repo)
     }
@@ -322,7 +426,7 @@ export async function repoRoutes(app: FastifyInstance) {
     const results = []
     for (const repo of repos) {
       try {
-        const result = await syncRepo(user, repo)
+        const result = await syncGitHubRepo(user, repo)
         results.push({ status: 'synced', ...result })
       } catch (error) {
         results.push({
@@ -368,7 +472,7 @@ export async function repoRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Repo not found' })
     }
 
-    return syncRepo(user, repo)
+    return syncGitHubRepo(user, repo)
   })
 
   app.post<{
@@ -396,7 +500,27 @@ export async function repoRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Repo not found. Run GET /github/repos first.' })
     }
 
-    return syncRepo(user, repo)
+    return syncGitHubRepo(user, repo)
+  })
+
+  app.post('/repos/sync-all/background', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    const repos = await prisma.repo.findMany({
+      where: {
+        ownerId: user.id,
+        isHidden: false,
+        githubRepoId: { not: { startsWith: 'gitea:' } },
+      },
+      select: { id: true, githubRepoId: true, ownerId: true },
+      orderBy: { fullName: 'asc' },
+    })
+
+    await enqueueRepos(repos, 'manual')
+    return { queued: repos.length, queueDepth: await getQueueDepth() }
   })
 
   app.delete<{ Params: { repoId: string } }>('/repos/:repoId', async (request, reply) => {
@@ -444,6 +568,9 @@ export async function repoRoutes(app: FastifyInstance) {
         githubRepoId: true,
         fullName: true,
         lastSyncedAt: true,
+        syncStatus: true,
+        lastSyncError: true,
+        lastSyncFinishedAt: true,
       },
     })
 
@@ -674,6 +801,9 @@ export async function repoRoutes(app: FastifyInstance) {
         githubRepoId: true,
         fullName: true,
         lastSyncedAt: true,
+        syncStatus: true,
+        lastSyncError: true,
+        lastSyncFinishedAt: true,
       },
       orderBy: { lastSyncedAt: 'desc' },
     })
@@ -707,6 +837,9 @@ export async function repoRoutes(app: FastifyInstance) {
         provider: repo.githubRepoId.startsWith('gitea:') ? 'gitea' : 'github',
         fullName: repo.fullName,
         lastSyncedAt: repo.lastSyncedAt,
+        syncStatus: repo.syncStatus,
+        lastSyncError: repo.lastSyncError,
+        lastSyncFinishedAt: repo.lastSyncFinishedAt,
         commits: repo.commits,
         pullRequests: repo.pullRequests,
       })),
@@ -797,6 +930,7 @@ export async function repoRoutes(app: FastifyInstance) {
       averagePrCycleHours,
       averageReviewLatencyHours,
       staleRepos,
+      queueDepth: await getQueueDepth(),
     }
   })
 
@@ -815,6 +949,8 @@ export async function repoRoutes(app: FastifyInstance) {
         fullName: true,
         isHidden: true,
         lastSyncedAt: true,
+        syncStatus: true,
+        lastSyncError: true,
       },
       orderBy: [{ isHidden: 'asc' }, { fullName: 'asc' }],
     })
@@ -837,6 +973,8 @@ export async function repoRoutes(app: FastifyInstance) {
         fullName: repo.fullName,
         isHidden: repo.isHidden,
         lastSyncedAt: repo.lastSyncedAt,
+        syncStatus: repo.syncStatus,
+        lastSyncError: repo.lastSyncError,
         commits: repo.commits,
         pullRequests: repo.pullRequests,
       })),

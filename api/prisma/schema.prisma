@@ -66,6 +66,10 @@ model Repo {
   defaultBranch String    @default("main") @map("default_branch")
   isPrivate     Boolean   @default(false) @map("is_private")
   isHidden      Boolean   @default(false) @map("is_hidden")
+  syncStatus    String    @default("idle") @map("sync_status")
+  lastSyncError String?   @map("last_sync_error")
+  lastSyncStartedAt DateTime? @map("last_sync_started_at")
+  lastSyncFinishedAt DateTime? @map("last_sync_finished_at")
   lastSyncedAt  DateTime? @map("last_synced_at")
   createdAt     DateTime  @default(now()) @map("created_at")
 
@@ -110,6 +114,7 @@ model PullRequest {
 
   repo    Repo       @relation(fields: [repoId], references: [id], onDelete: Cascade)
   reviews PrReview[]
+  comments PrComment[]
 
   @@unique([repoId, githubPrNumber])
   @@index([repoId, openedAt])
@@ -128,6 +133,20 @@ model PrReview {
   pullRequest PullRequest @relation(fields: [prId], references: [id], onDelete: Cascade)
 
   @@map("pr_reviews")
+}
+
+model PrComment {
+  id                String   @id
+  prId              String   @map("pr_id")
+  commenterGithubId String   @map("commenter_github_id")
+  kind              String
+  body              String
+  commentedAt       DateTime @map("commented_at")
+
+  pullRequest PullRequest @relation(fields: [prId], references: [id], onDelete: Cascade)
+
+  @@index([prId, commentedAt])
+  @@map("pr_comments")
 }
 
 // ── ML Scores ──────────────────────────────────────────────────────────────────

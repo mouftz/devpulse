@@ -102,25 +102,32 @@ services:
     networks:
       - devpulse_net
 
-  # ── ETL worker (Python cron) ─────────────────────────────────────────────────
+  # ── Sync worker (Redis queue + nightly scheduler) ───────────────────────────
   etl-worker:
     build:
-      context: ./etl
+      context: ./api
       dockerfile: Dockerfile
     restart: unless-stopped
+    command: npm run worker:dev
     environment:
       DATABASE_URL: postgresql://devpulse:devpulse_secret@postgres:5432/devpulse_db
       REDIS_URL: redis://redis:6379
       SYNC_INTERVAL_SECONDS: ${SYNC_INTERVAL_SECONDS:-86400}
       RUN_ON_START: ${RUN_ON_START:-true}
-      BIGQUERY_PROJECT: ${BIGQUERY_PROJECT:-devpulse-local}
+      JWT_SECRET: change_me_in_production
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      GITEA_BASE_URL: ${GITEA_BASE_URL:-}
+      GITEA_TOKEN: ${GITEA_TOKEN:-}
+      NODE_ENV: development
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
-      - ./etl:/app
+      - ./api:/app
+      - /app/node_modules
     networks:
       - devpulse_net
 

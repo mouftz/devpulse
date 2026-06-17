@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { AuthLanding } from './components/AuthLanding'
 import { WorkspaceSessionMenu } from './components/WorkspaceSessionMenu'
+import { getSyncHealthSummary, getSyncStatusLabel } from './lib/dashboard-utils.js'
 
 const API_URL = 'http://localhost:3000'
 
@@ -44,6 +45,9 @@ type Overview = {
     provider: 'github' | 'gitea'
     fullName: string
     lastSyncedAt: string | null
+    lastSyncFinishedAt: string | null
+    syncStatus: 'idle' | 'queued' | 'syncing' | 'healthy' | 'failed'
+    lastSyncError: string | null
     commits: number
     pullRequests: number
   }>
@@ -134,6 +138,7 @@ type SystemStatus = {
   sync: {
     intervalSeconds: number
     runOnStart: boolean
+    queueDepth: number
   }
   providers: {
     githubOauthConfigured: boolean
@@ -148,6 +153,7 @@ type DashboardInsights = {
   averagePrCycleHours: number | null
   averageReviewLatencyHours: number | null
   staleRepos: number
+  queueDepth: number
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
@@ -232,6 +238,18 @@ export function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
+  const refreshDashboard = async () => {
+    const [nextOverview, nextActivity, nextInsights] = await Promise.all([
+      api<Overview>(`/github/overview?scope=${analyticsScope}`),
+      api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
+      api<DashboardInsights>(`/github/insights?days=${rangeDays}&scope=${analyticsScope}`),
+    ])
+    setOverview(nextOverview)
+    setActivity(nextActivity)
+    setInsights(nextInsights)
+    return { nextOverview, nextActivity, nextInsights }
+  }
+
   const load = async () => {
     setState('loading')
     try {
@@ -239,14 +257,7 @@ export function App() {
       setUser(me.user)
 
       await Promise.all([api('/github/repos'), api('/gitea/repos').catch(() => null)])
-      const [nextOverview, nextActivity, nextInsights] = await Promise.all([
-        api<Overview>(`/github/overview?scope=${analyticsScope}`),
-        api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
-        api<DashboardInsights>(`/github/insights?days=${rangeDays}&scope=${analyticsScope}`),
-      ])
-      setOverview(nextOverview)
-      setActivity(nextActivity)
-      setInsights(nextInsights)
+      const { nextOverview } = await refreshDashboard()
       setSelectedRepoId((current) => current ?? nextOverview.repos.find((repo) => repo.lastSyncedAt)?.id ?? null)
       setState('ready')
     } catch {
@@ -346,24 +357,20 @@ export function App() {
     setNotice(null)
     try {
       const [githubResult, giteaResult] = await Promise.all([
-        api<SyncAllResult>('/github/repos/sync-all').catch(failedSyncResult),
-        api<SyncAllResult>('/gitea/repos/sync-all').catch(failedSyncResult),
+        api<{ queued: number; queueDepth: number }>('/github/repos/sync-all/background', {
+          method: 'POST',
+        }).catch(() => ({ queued: 0, queueDepth: 0 })),
+        api<{ queued: number; queueDepth: number }>('/gitea/repos/sync-all/background', {
+          method: 'POST',
+        }).catch(() => ({ queued: 0, queueDepth: 0 })),
       ])
-      const [nextOverview, nextActivity, nextInsights] = await Promise.all([
-        api<Overview>(`/github/overview?scope=${analyticsScope}`),
-        api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
-        api<DashboardInsights>(`/github/insights?days=${rangeDays}&scope=${analyticsScope}`),
-      ])
-      setOverview(nextOverview)
-      setActivity(nextActivity)
-      setInsights(nextInsights)
-      const synced = githubResult.synced + giteaResult.synced
-      const failed = githubResult.failed + giteaResult.failed
-      const failures = [...syncFailures('github', githubResult), ...syncFailures('gitea', giteaResult)]
+      const { nextInsights } = await refreshDashboard()
+      const queued = githubResult.queued + giteaResult.queued
+      const queueDepth = Math.max(githubResult.queueDepth, giteaResult.queueDepth, nextInsights.queueDepth)
       setNotice(
-        failed
-          ? `Synced ${synced} repositories. ${failed} failed: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? '; more in API logs' : ''}.`
-          : `Synced ${synced} repositories.`,
+        queued > 0
+          ? `Queued ${queued} repositories for background sync. ${queueDepth} jobs waiting.`
+          : 'No repositories were queued.',
       )
     } catch (error) {
       setNotice(`Sync refresh failed: ${errorMessage(error)}`)
@@ -378,19 +385,14 @@ export function App() {
     setNotice(null)
     try {
       await api(`/${repo?.provider ?? 'github'}/repos/${repoId}/sync`, { method: 'POST' })
-      const [nextOverview, nextActivity, nextInsights, nextRepoActivity, nextSummary, nextPrCycle, nextReviewLatency] =
+      const [{ nextOverview }, nextRepoActivity, nextSummary, nextPrCycle, nextReviewLatency] =
         await Promise.all([
-          api<Overview>(`/github/overview?scope=${analyticsScope}`),
-          api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
-          api<DashboardInsights>(`/github/insights?days=${rangeDays}&scope=${analyticsScope}`),
+          refreshDashboard(),
           api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=${rangeDays}&scope=${analyticsScope}`),
           api<RepoSummary>(`/github/repos/${repoId}/summary?scope=${analyticsScope}`),
           api<PrCycleTrend>(`/github/repos/${repoId}/pr-cycle?days=${rangeDays}&scope=${analyticsScope}`),
           api<ReviewLatency>(`/github/repos/${repoId}/review-latency?days=${rangeDays}&scope=${analyticsScope}`),
         ])
-      setOverview(nextOverview)
-      setActivity(nextActivity)
-      setInsights(nextInsights)
       setRepoActivity(nextRepoActivity)
       setRepoSummary(nextSummary)
       setPrCycle(nextPrCycle)
@@ -435,13 +437,10 @@ export function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ isHidden }),
       })
-      const [nextOverview, nextActivity] = await Promise.all([
-        api<Overview>(`/github/overview?scope=${analyticsScope}`),
-        api<ActivitySummary>(`/github/activity?days=${rangeDays}&scope=${analyticsScope}`),
+      const [{ nextOverview }] = await Promise.all([
+        refreshDashboard(),
         loadManagerRepos(),
       ])
-      setOverview(nextOverview)
-      setActivity(nextActivity)
 
       if (isHidden && selectedRepoId === repoId) {
         const nextSelected = nextOverview.repos.find((candidate) => candidate.lastSyncedAt)?.id ?? nextOverview.repos[0]?.id ?? null
@@ -512,10 +511,31 @@ export function App() {
     averagePrCycleHours: null,
     averageReviewLatencyHours: null,
     staleRepos: 0,
+    queueDepth: 0,
   }
+  const syncHealth = getSyncHealthSummary(insightSummary.queueDepth, insightSummary.staleRepos)
   const rangeLabel = rangeDays === 365 ? 'the last year' : `the last ${rangeDays} days`
   const scopeLabel = analyticsScope === 'mine' ? 'your activity' : 'all contributors'
   const isAuthenticated = Boolean(user)
+  const queueActive =
+    insightSummary.queueDepth > 0 ||
+    (overview?.repos ?? []).some((repo) => repo.syncStatus === 'queued' || repo.syncStatus === 'syncing')
+
+  useEffect(() => {
+    if (!isAuthenticated || !queueActive) return
+
+    const interval = window.setInterval(() => {
+      void refreshDashboard()
+        .then(() => {
+          if (managerOpen) {
+            return loadManagerRepos()
+          }
+        })
+        .catch(() => undefined)
+    }, 4000)
+
+    return () => window.clearInterval(interval)
+  }, [analyticsScope, isAuthenticated, managerOpen, queueActive, rangeDays])
 
   if (!isAuthenticated) {
     return <AuthLanding onConnectGitHub={connectGitHub} />
@@ -577,11 +597,7 @@ export function App() {
           <div className="glass-panel workspace-status-strip">
             <StatusTile label="Live Pulse" value={String(totals.commits)} detail={`${totals.syncedRepos} repositories synced`} />
             <StatusTile label="Active Repos" value={String(insightSummary.activeRepos)} detail={rangeLabel} />
-            <StatusTile
-              label="Sync Health"
-              value={insightSummary.staleRepos === 0 ? 'Healthy' : `${insightSummary.staleRepos} stale`}
-              detail="Repos not synced in 7 days"
-            />
+            <StatusTile label="Sync Health" value={syncHealth.value} detail={syncHealth.detail} />
           </div>
         </div>
       </section>
@@ -721,6 +737,10 @@ export function App() {
                     <div>
                       <strong>{repo.fullName}</strong>
                       <span>{repo.provider} · {formatDate(repo.lastSyncedAt)}</span>
+                      <div className="repo-row-meta">
+                        <SyncStatusPill status={repo.syncStatus} />
+                        {repo.lastSyncError ? <em>{repo.lastSyncError}</em> : null}
+                      </div>
                     </div>
                     <div className="repo-stats">
                       <span>{repo.commits} commits</span>
@@ -913,6 +933,10 @@ export function App() {
                         {repo.fullName}
                       </strong>
                       <span>{repo.provider} · {formatDate(repo.lastSyncedAt)} · {repo.commits} commits · {repo.pullRequests} PRs</span>
+                      <div className="repo-row-meta manager-meta">
+                        <SyncStatusPill status={repo.syncStatus} />
+                        {repo.lastSyncError ? <em>{repo.lastSyncError}</em> : null}
+                      </div>
                     </div>
                     <div className="manager-row-actions">
                       <button className="secondary-button compact-button" onClick={() => void syncRepo(repo.id)} disabled={repo.isHidden || syncingRepoId === repo.id || removingRepoId === repo.id}>
@@ -984,6 +1008,7 @@ export function App() {
                   <StatPill label="Mode" value={systemStatus.api.nodeEnv} />
                   <StatPill label="Sync cadence" value={formatInterval(systemStatus.sync.intervalSeconds)} />
                   <StatPill label="Run on start" value={systemStatus.sync.runOnStart ? 'Enabled' : 'Off'} />
+                  <StatPill label="Queue depth" value={String(systemStatus.sync.queueDepth)} />
                   <StatPill label="GitHub OAuth" value={systemStatus.providers.githubOauthConfigured ? 'Ready' : 'Missing'} />
                   <StatPill label="Gitea env" value={systemStatus.providers.giteaConfigured ? 'Ready' : 'Missing'} />
                 </div>
@@ -1046,7 +1071,6 @@ function ReviewLatencyChart({ latency }: { latency: ReviewLatency | null }) {
       }))}
       subtitle="First review response"
       tone="amber"
-      tooltipLabel={(point) => `${point.value.toFixed(1)}h average · ${weeks.find((week) => week.week === point.key)?.reviewedPrs ?? 0} reviewed PRs`}
     />
   )
 }
@@ -1067,7 +1091,6 @@ function PrCycleChart({ trend }: { trend: PrCycleTrend | null }) {
       }))}
       subtitle={trend?.trend === 'improving' ? 'Moving faster' : trend?.trend === 'slowing' ? 'Taking longer' : 'Holding steady'}
       tone={trend?.trend === 'slowing' ? 'rose' : 'mint'}
-      tooltipLabel={(point) => `${point.value.toFixed(1)}h average · ${weeks.find((week) => week.week === point.key)?.mergedPrs ?? 0} merged PRs`}
     />
   )
 }
@@ -1081,7 +1104,6 @@ function RepoActivityChart({ days }: { days: ActivityDay[] }) {
       subtitle="Commit volume"
       tone="mint"
       valueSuffix=""
-      tooltipLabel={(point) => `${point.value} commits · ${point.label}`}
     />
   )
 }
@@ -1171,17 +1193,24 @@ function StatPill({ label, value }: { label: string; value: string }) {
   )
 }
 
+function SyncStatusPill({
+  status,
+}: {
+  status: 'idle' | 'queued' | 'syncing' | 'healthy' | 'failed' | undefined
+}) {
+  const resolvedStatus = status ?? 'healthy'
+  return <span className={`sync-status-pill ${resolvedStatus}`}>{getSyncStatusLabel(resolvedStatus)}</span>
+}
+
 function TrendLineChart({
   points,
   subtitle,
   tone,
-  tooltipLabel,
   valueSuffix = 'h',
 }: {
   points: LinePoint[]
   subtitle: string
   tone: 'mint' | 'amber' | 'rose'
-  tooltipLabel: (point: LinePoint) => string
   valueSuffix?: string
 }) {
   const [hoveredKey, setHoveredKey] = useState<string | null>(null)
@@ -1207,7 +1236,6 @@ function TrendLineChart({
   const line = coords.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
   const area = `${line} L ${coords[coords.length - 1]?.x ?? paddingX} ${height - paddingBottom} L ${coords[0]?.x ?? paddingX} ${height - paddingBottom} Z`
   const tickIndexes = Array.from(new Set([0, Math.floor((coords.length - 1) / 2), coords.length - 1])).filter((index) => index >= 0)
-  const hoveredPoint = hoveredKey ? coords.find((point) => point.key === hoveredKey) ?? null : null
   const yTicks = [
     { label: `${max.toFixed(max >= 10 ? 0 : 1)}${valueSuffix}`, position: paddingTop },
     { label: `${(min + range / 2).toFixed(range / 2 >= 10 ? 0 : 1)}${valueSuffix}`, position: (height - paddingBottom + paddingTop) / 2 },
@@ -1238,14 +1266,6 @@ function TrendLineChart({
           ))}
         </div>
         <div className="trend-chart-main">
-          {hoveredPoint ? (
-            <div className="trend-hover-card">
-              <strong>{hoveredPoint.label}</strong>
-              <span>{tooltipLabel(hoveredPoint)}</span>
-            </div>
-          ) : (
-            <div className="trend-hover-card muted">Hover a point for detail.</div>
-          )}
           <svg
             className="trend-line-chart"
             viewBox={`0 0 ${width} ${height}`}

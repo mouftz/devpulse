@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import got from 'got'
 import prisma from '../db.js'
+import { getQueueDepth } from '../lib/sync-queue.js'
 
 type GitHubTokenResponse = {
   access_token: string
@@ -229,6 +230,7 @@ export async function authRoutes(app: FastifyInstance) {
         sync: {
           intervalSeconds: Number(process.env.SYNC_INTERVAL_SECONDS ?? 86400),
           runOnStart: String(process.env.RUN_ON_START ?? 'true') === 'true',
+          queueDepth: await getQueueDepth(),
         },
         providers: {
           githubOauthConfigured: Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),

@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import got from 'got'
 import prisma from '../db.js'
+import {
+  enqueueRepos,
+  getQueueDepth,
+  markRepoSyncFailed,
+  markRepoSyncStarted,
+  markRepoSyncSucceeded,
+} from '../lib/sync-queue.js'
 
 type AuthPayload = {
   sub: string
@@ -37,6 +44,13 @@ type GiteaReview = {
   id: number
   state: string
   submitted_at: string
+  user?: { login?: string; username?: string } | null
+}
+
+type GiteaComment = {
+  id: number
+  body: string
+  created_at: string
   user?: { login?: string; username?: string } | null
 }
 
@@ -85,68 +99,61 @@ const giteaMergedAt = (pullRequest: GiteaPullRequest) => {
 
 const giteaState = (pullRequest: GiteaPullRequest) => (giteaMergedAt(pullRequest) ? 'merged' : pullRequest.state)
 
-export async function giteaRoutes(app: FastifyInstance) {
-  const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
-    const token = getBearerToken(request)
-    if (!token) {
-      reply.code(401).send({ error: 'Missing bearer token' })
-      return null
-    }
+const paginateGitea = async <T>(path: string, searchParams: Record<string, string> = {}) => {
+  const results: T[] = []
+  const limit = Number(searchParams.limit ?? '100')
 
-    let payload: AuthPayload
-    try {
-      payload = app.jwt.verify<AuthPayload>(token)
-    } catch {
-      reply.code(401).send({ error: 'Invalid bearer token' })
-      return null
-    }
+  for (let page = 1; page <= 20; page += 1) {
+    const items = await got
+      .get(path, {
+        searchParams: {
+          limit: String(limit),
+          page: String(page),
+          ...searchParams,
+        },
+        headers: giteaHeaders(),
+      })
+      .json<T[]>()
 
-    const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true },
-    })
-
-    if (!user) {
-      reply.code(401).send({ error: 'User not found' })
-      return null
-    }
-
-    return user
+    results.push(...items)
+    if (items.length < limit) break
   }
 
-  const syncRepo = async (repo: { id: string; fullName: string }) => {
+  return results
+}
+
+export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
+  await markRepoSyncStarted(repo.id)
+  try {
     const [owner, name] = repo.fullName.split('/')
     if (!owner || !name) {
       throw new Error(`Invalid Gitea repo name: ${repo.fullName}`)
     }
 
     const apiUrl = giteaApiUrl()
-    const headers = giteaHeaders()
-
-    const commits = await got
-      .get(`${apiUrl}/repos/${owner}/${name}/commits`, {
-        searchParams: { limit: '100' },
-        headers,
-      })
-      .json<GiteaCommit[]>()
-
-    const pullRequests = await got
-      .get(`${apiUrl}/repos/${owner}/${name}/pulls`, {
-        searchParams: { state: 'all', limit: '100' },
-        headers,
-      })
-      .json<GiteaPullRequest[]>()
+    const commits = await paginateGitea<GiteaCommit>(`${apiUrl}/repos/${owner}/${name}/commits`)
+    const pullRequests = await paginateGitea<GiteaPullRequest>(`${apiUrl}/repos/${owner}/${name}/pulls`, {
+      state: 'all',
+    })
 
     const reviewsByPr = new Map<number, GiteaReview[]>()
+    const reviewCommentsByPr = new Map<number, GiteaComment[]>()
+    const issueCommentsByPr = new Map<number, GiteaComment[]>()
     await Promise.all(
       pullRequests.map(async (pullRequest) => {
         try {
-          const reviews = await got
-            .get(`${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/reviews`, { headers })
-            .json<GiteaReview[]>()
+          const [reviews, reviewComments, issueComments] = await Promise.all([
+            paginateGitea<GiteaReview>(`${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/reviews`),
+            paginateGitea<GiteaComment>(`${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/comments`),
+            paginateGitea<GiteaComment>(`${apiUrl}/repos/${owner}/${name}/issues/${pullRequest.number}/comments`),
+          ])
           reviewsByPr.set(pullRequest.number, reviews)
+          reviewCommentsByPr.set(pullRequest.number, reviewComments)
+          issueCommentsByPr.set(pullRequest.number, issueComments)
         } catch {
           reviewsByPr.set(pullRequest.number, [])
+          reviewCommentsByPr.set(pullRequest.number, [])
+          issueCommentsByPr.set(pullRequest.number, [])
         }
       }),
     )
@@ -238,17 +245,43 @@ export async function giteaRoutes(app: FastifyInstance) {
         }),
       )
 
-      await tx.repo.update({
-        where: { id: repo.id },
-        data: { lastSyncedAt: new Date() },
-      })
+      const savedComments = await Promise.all(
+        savedPullRequests.flatMap((savedPullRequest) => {
+          const reviewComments = reviewCommentsByPr.get(savedPullRequest.githubPrNumber) ?? []
+          const issueComments = issueCommentsByPr.get(savedPullRequest.githubPrNumber) ?? []
+
+          return [...reviewComments, ...issueComments].map((comment) => {
+            const isReviewComment = reviewComments.some((entry) => entry.id === comment.id)
+            return tx.prComment.upsert({
+              where: { id: `gitea:${savedPullRequest.id}:${isReviewComment ? 'review' : 'issue'}:${comment.id}` },
+              create: {
+                id: `gitea:${savedPullRequest.id}:${isReviewComment ? 'review' : 'issue'}:${comment.id}`,
+                prId: savedPullRequest.id,
+                commenterGithubId: giteaIdentity(comment.user) ?? 'ghost',
+                kind: isReviewComment ? 'review' : 'issue',
+                body: comment.body.slice(0, 4000),
+                commentedAt: new Date(comment.created_at),
+              },
+              update: {
+                commenterGithubId: giteaIdentity(comment.user) ?? 'ghost',
+                kind: isReviewComment ? 'review' : 'issue',
+                body: comment.body.slice(0, 4000),
+                commentedAt: new Date(comment.created_at),
+              },
+            })
+          })
+        }),
+      )
 
       return {
         commits: savedCommits.length,
         pullRequests: savedPullRequests.length,
         reviews: savedReviews.length,
+        comments: savedComments.length,
       }
     })
+
+    await markRepoSyncSucceeded(repo.id)
 
     return {
       repo: {
@@ -257,6 +290,39 @@ export async function giteaRoutes(app: FastifyInstance) {
       },
       synced,
     }
+  } catch (error) {
+    await markRepoSyncFailed(repo.id, error instanceof Error ? error.message : 'Unknown sync error')
+    throw error
+  }
+}
+
+export async function giteaRoutes(app: FastifyInstance) {
+  const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
+    const token = getBearerToken(request)
+    if (!token) {
+      reply.code(401).send({ error: 'Missing bearer token' })
+      return null
+    }
+
+    let payload: AuthPayload
+    try {
+      payload = app.jwt.verify<AuthPayload>(token)
+    } catch {
+      reply.code(401).send({ error: 'Invalid bearer token' })
+      return null
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub },
+      select: { id: true },
+    })
+
+    if (!user) {
+      reply.code(401).send({ error: 'User not found' })
+      return null
+    }
+
+    return user
   }
 
   app.get('/repos', async (request, reply) => {
@@ -338,7 +404,7 @@ export async function giteaRoutes(app: FastifyInstance) {
     const results = []
     for (const repo of repos) {
       try {
-        const result = await syncRepo(repo)
+        const result = await syncGiteaRepo(repo)
         results.push({ status: 'synced', ...result })
       } catch (error) {
         results.push({
@@ -380,7 +446,27 @@ export async function giteaRoutes(app: FastifyInstance) {
       return reply.code(404).send({ error: 'Gitea repo not found' })
     }
 
-    return syncRepo(repo)
+    return syncGiteaRepo(repo)
+  })
+
+  app.post('/repos/sync-all/background', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    const repos = await prisma.repo.findMany({
+      where: {
+        ownerId: user.id,
+        githubRepoId: { startsWith: 'gitea:' },
+        isHidden: false,
+      },
+      select: { id: true, githubRepoId: true, ownerId: true },
+      orderBy: { fullName: 'asc' },
+    })
+
+    await enqueueRepos(repos, 'manual')
+    return { queued: repos.length, queueDepth: await getQueueDepth() }
   })
 
   app.delete<{ Params: { repoId: string } }>('/repos/:repoId', async (request, reply) => {

@@ -5,8 +5,11 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon --watch src --ext ts --exec tsx src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js"
+    "worker": "node dist/worker.js",
+    "worker:dev": "tsx src/worker.ts",
+    "build": "prisma generate && tsc",
+    "start": "node dist/index.js",
+    "test": "npm run build && node --test dist/**/*.test.js"
   },
   "keywords": [],
   "author": "",

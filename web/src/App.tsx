@@ -74,6 +74,16 @@ type PrCycleTrend = {
   }>
 }
 
+type ReviewLatency = {
+  averageHours: number | null
+  reviewedPullRequests: number
+  weeks: Array<{
+    week: string
+    averageHours: number
+    reviewedPrs: number
+  }>
+}
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type RepoSort = 'recent' | 'commits' | 'unsynced'
 
@@ -108,6 +118,7 @@ export function App() {
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
   const [repoSummary, setRepoSummary] = useState<RepoSummary | null>(null)
   const [prCycle, setPrCycle] = useState<PrCycleTrend | null>(null)
+  const [reviewLatency, setReviewLatency] = useState<ReviewLatency | null>(null)
   const [repoSort, setRepoSort] = useState<RepoSort>('recent')
   const [state, setState] = useState<LoadState>('idle')
   const [syncing, setSyncing] = useState(false)
@@ -135,6 +146,7 @@ export function App() {
       setActivity(null)
       setRepoActivity(null)
       setPrCycle(null)
+      setReviewLatency(null)
       setSelectedRepoId(null)
       setRepoSummary(null)
       setState('error')
@@ -178,6 +190,7 @@ export function App() {
       setRepoSummary(null)
       setRepoActivity(null)
       setPrCycle(null)
+      setReviewLatency(null)
       return
     }
 
@@ -185,16 +198,19 @@ export function App() {
       api<RepoSummary>(`/github/repos/${selectedRepoId}/summary`),
       api<ActivitySummary>(`/github/activity?repoId=${selectedRepoId}&days=30`),
       api<PrCycleTrend>(`/github/repos/${selectedRepoId}/pr-cycle?days=90`),
+      api<ReviewLatency>(`/github/repos/${selectedRepoId}/review-latency?days=90`),
     ])
-      .then(([nextSummary, nextActivity, nextPrCycle]) => {
+      .then(([nextSummary, nextActivity, nextPrCycle, nextReviewLatency]) => {
         setRepoSummary(nextSummary)
         setRepoActivity(nextActivity)
         setPrCycle(nextPrCycle)
+        setReviewLatency(nextReviewLatency)
       })
       .catch(() => {
         setRepoSummary(null)
         setRepoActivity(null)
         setPrCycle(null)
+        setReviewLatency(null)
       })
   }, [selectedRepoId])
 
@@ -230,18 +246,21 @@ export function App() {
     setNotice(null)
     try {
       await api(`/${repo?.provider ?? 'github'}/repos/${repoId}/sync`, { method: 'POST' })
-      const [nextOverview, nextActivity, nextRepoActivity, nextSummary, nextPrCycle] = await Promise.all([
-        api<Overview>('/github/overview'),
-        api<ActivitySummary>('/github/activity'),
-        api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=30`),
-        api<RepoSummary>(`/github/repos/${repoId}/summary`),
-        api<PrCycleTrend>(`/github/repos/${repoId}/pr-cycle?days=90`),
-      ])
+      const [nextOverview, nextActivity, nextRepoActivity, nextSummary, nextPrCycle, nextReviewLatency] =
+        await Promise.all([
+          api<Overview>('/github/overview'),
+          api<ActivitySummary>('/github/activity'),
+          api<ActivitySummary>(`/github/activity?repoId=${repoId}&days=30`),
+          api<RepoSummary>(`/github/repos/${repoId}/summary`),
+          api<PrCycleTrend>(`/github/repos/${repoId}/pr-cycle?days=90`),
+          api<ReviewLatency>(`/github/repos/${repoId}/review-latency?days=90`),
+        ])
       setOverview(nextOverview)
       setActivity(nextActivity)
       setRepoActivity(nextRepoActivity)
       setRepoSummary(nextSummary)
       setPrCycle(nextPrCycle)
+      setReviewLatency(nextReviewLatency)
       setSelectedRepoId(repoId)
       setNotice(`Synced ${nextSummary.repo.fullName}.`)
     } finally {
@@ -256,6 +275,7 @@ export function App() {
     setActivity(null)
     setRepoActivity(null)
     setPrCycle(null)
+    setReviewLatency(null)
     setSelectedRepoId(null)
     setRepoSummary(null)
     setNotice(null)
@@ -513,6 +533,17 @@ export function App() {
               <PrCycleChart trend={prCycle} />
             </div>
           ) : null}
+
+          {selectedRepo ? (
+            <div className="review-latency-block">
+              <div>
+                <span className="subtle-label">Review latency</span>
+                <strong>{formatReviewLatency(reviewLatency)}</strong>
+                <p>{formatReviewLatencyDetail(reviewLatency)}</p>
+              </div>
+              <ReviewLatencyChart latency={reviewLatency} />
+            </div>
+          ) : null}
         </section>
       </section>
     </main>
@@ -532,6 +563,37 @@ const formatTrendDetail = (trend: PrCycleTrend | null) => {
   if (trend.deltaHours == null) return average
   const direction = trend.deltaHours > 0 ? 'slower' : 'faster'
   return `${average}, ${Math.abs(trend.deltaHours).toFixed(1)}h ${direction} vs earlier weeks`
+}
+
+const formatReviewLatency = (latency: ReviewLatency | null) => {
+  if (!latency || latency.averageHours == null) return 'No review data'
+  return `${latency.averageHours.toFixed(1)}h`
+}
+
+const formatReviewLatencyDetail = (latency: ReviewLatency | null) => {
+  if (!latency || latency.averageHours == null) return 'Sync PR reviews to see first-review timing.'
+  return `Average first review across ${latency.reviewedPullRequests} reviewed PRs`
+}
+
+function ReviewLatencyChart({ latency }: { latency: ReviewLatency | null }) {
+  const weeks = latency?.weeks ?? []
+  const max = Math.max(...weeks.map((week) => week.averageHours), 1)
+
+  if (!weeks.length) {
+    return <div className="trend-empty">No weekly review latency data yet.</div>
+  }
+
+  return (
+    <div className="review-latency-chart" aria-label="Review latency by week">
+      {weeks.map((week) => (
+        <span
+          key={week.week}
+          style={{ height: `${Math.max(10, (week.averageHours / max) * 100)}%` }}
+          title={`${week.averageHours.toFixed(1)}h average, ${week.reviewedPrs} reviewed PRs`}
+        />
+      ))}
+    </div>
+  )
 }
 
 function PrCycleChart({ trend }: { trend: PrCycleTrend | null }) {

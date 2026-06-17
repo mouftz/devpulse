@@ -685,7 +685,8 @@ h2 {
   background: linear-gradient(180deg, #7ee0c0, rgba(77, 171, 247, 0.55));
 }
 
-.pr-trend-block {
+.pr-trend-block,
+.review-latency-block {
   display: grid;
   grid-template-columns: minmax(180px, 0.34fr) minmax(0, 1fr);
   align-items: end;
@@ -695,13 +696,15 @@ h2 {
   border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.pr-trend-block strong {
+.pr-trend-block strong,
+.review-latency-block strong {
   display: block;
   margin-top: 8px;
   font-size: 1.25rem;
 }
 
-.pr-trend-block p {
+.pr-trend-block p,
+.review-latency-block p {
   margin: 8px 0 0;
   color: rgba(246, 247, 251, 0.58);
   font-size: 0.92rem;
@@ -709,6 +712,7 @@ h2 {
 }
 
 .pr-cycle-chart,
+.review-latency-chart,
 .trend-empty {
   height: 104px;
   padding: 12px;
@@ -717,20 +721,26 @@ h2 {
   border-radius: 8px;
 }
 
-.pr-cycle-chart {
+.pr-cycle-chart,
+.review-latency-chart {
   display: flex;
   align-items: end;
   gap: 8px;
   overflow: hidden;
 }
 
-.pr-cycle-chart span {
+.pr-cycle-chart span,
+.review-latency-chart span {
   display: block;
   flex: 1 1 0;
   max-width: 42px;
   min-height: 10px;
   border-radius: 6px 6px 2px 2px;
   background: linear-gradient(180deg, rgba(126, 224, 192, 0.95), rgba(74, 139, 245, 0.52));
+}
+
+.review-latency-chart span {
+  background: linear-gradient(180deg, rgba(255, 209, 102, 0.95), rgba(238, 113, 71, 0.5));
 }
 
 .trend-empty {
@@ -828,6 +838,10 @@ h2 {
   }
 
   .pr-trend-block {
+    grid-template-columns: 1fr;
+  }
+
+  .review-latency-block {
     grid-template-columns: 1fr;
   }
 

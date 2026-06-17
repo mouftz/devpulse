@@ -37,6 +37,13 @@ type GitHubPullRequest = {
   closed_at: string | null
 }
 
+type GitHubReview = {
+  id: number
+  state: string
+  submitted_at: string | null
+  user: { login: string } | null
+}
+
 const getBearerToken = (request: FastifyRequest) => {
   const authorization = request.headers.authorization
   if (authorization?.startsWith('Bearer ')) {
@@ -96,6 +103,20 @@ export async function repoRoutes(app: FastifyInstance) {
       })
       .json<GitHubPullRequest[]>()
 
+    const reviewsByPr = new Map<number, GitHubReview[]>()
+    await Promise.all(
+      pullRequests.map(async (pullRequest) => {
+        try {
+          const reviews = await got
+            .get(`https://api.github.com/repos/${repo.fullName}/pulls/${pullRequest.number}/reviews`, { headers })
+            .json<GitHubReview[]>()
+          reviewsByPr.set(pullRequest.number, reviews)
+        } catch {
+          reviewsByPr.set(pullRequest.number, [])
+        }
+      }),
+    )
+
     const synced = await prisma.$transaction(async (tx) => {
       const savedCommits = await Promise.all(
         commits.map((commit) =>
@@ -152,6 +173,46 @@ export async function repoRoutes(app: FastifyInstance) {
         ),
       )
 
+      const savedReviews = await Promise.all(
+        savedPullRequests.flatMap((savedPullRequest) => {
+          const sourcePullRequest = pullRequests.find(
+            (pullRequest) => pullRequest.number === savedPullRequest.githubPrNumber,
+          )
+          const reviews = reviewsByPr.get(savedPullRequest.githubPrNumber) ?? []
+
+          if (!sourcePullRequest) return []
+
+          return reviews
+            .filter((review) => review.submitted_at)
+            .map((review) => {
+              const submittedAt = new Date(review.submitted_at ?? sourcePullRequest.created_at)
+              const openedAt = new Date(sourcePullRequest.created_at)
+              const timeToReviewMins = Math.max(
+                0,
+                Math.round((submittedAt.getTime() - openedAt.getTime()) / 1000 / 60),
+              )
+
+              return tx.prReview.upsert({
+                where: { id: `github:${savedPullRequest.id}:${review.id}` },
+                create: {
+                  id: `github:${savedPullRequest.id}:${review.id}`,
+                  prId: savedPullRequest.id,
+                  reviewerGithubId: review.user?.login ?? 'ghost',
+                  state: review.state.toLowerCase(),
+                  timeToReviewMins,
+                  submittedAt,
+                },
+                update: {
+                  reviewerGithubId: review.user?.login ?? 'ghost',
+                  state: review.state.toLowerCase(),
+                  timeToReviewMins,
+                  submittedAt,
+                },
+              })
+            })
+        }),
+      )
+
       await tx.repo.update({
         where: { id: repo.id },
         data: { lastSyncedAt: new Date() },
@@ -160,6 +221,7 @@ export async function repoRoutes(app: FastifyInstance) {
       return {
         commits: savedCommits.length,
         pullRequests: savedPullRequests.length,
+        reviews: savedReviews.length,
       }
     })
 
@@ -388,7 +450,7 @@ export async function repoRoutes(app: FastifyInstance) {
       return
     }
 
-    const dayCount = Math.min(Math.max(Number(request.query.days ?? 90), 7), 365)
+    const dayCount = Math.min(Math.max(Number(request.query.days ?? 365), 7), 365)
     const end = new Date()
     const start = new Date(end)
     start.setUTCDate(start.getUTCDate() - (dayCount - 1))
@@ -409,8 +471,7 @@ export async function repoRoutes(app: FastifyInstance) {
     const pullRequests = await prisma.pullRequest.findMany({
       where: {
         repoId: repo.id,
-        openedAt: { gte: start, lte: end },
-        mergedAt: { not: null },
+        mergedAt: { not: null, gte: start, lte: end },
       },
       select: {
         openedAt: true,
@@ -457,6 +518,89 @@ export async function repoRoutes(app: FastifyInstance) {
       averageHours,
       trend,
       deltaHours,
+      weeks: weekly,
+    }
+  })
+
+  app.get<{
+    Params: { repoId: string }
+    Querystring: { days?: string }
+  }>('/repos/:repoId/review-latency', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) {
+      return
+    }
+
+    const dayCount = Math.min(Math.max(Number(request.query.days ?? 90), 7), 365)
+    const end = new Date()
+    const start = new Date(end)
+    start.setUTCDate(start.getUTCDate() - (dayCount - 1))
+    start.setUTCHours(0, 0, 0, 0)
+
+    const repo = await prisma.repo.findFirst({
+      where: {
+        id: request.params.repoId,
+        ownerId: user.id,
+      },
+      select: { id: true },
+    })
+
+    if (!repo) {
+      return reply.code(404).send({ error: 'Repo not found' })
+    }
+
+    const pullRequests = await prisma.pullRequest.findMany({
+      where: {
+        repoId: repo.id,
+        openedAt: { gte: start, lte: end },
+        reviews: { some: { timeToReviewMins: { not: null } } },
+      },
+      select: {
+        id: true,
+        openedAt: true,
+        reviews: {
+          where: { timeToReviewMins: { not: null } },
+          select: {
+            timeToReviewMins: true,
+            submittedAt: true,
+          },
+          orderBy: { submittedAt: 'asc' },
+          take: 1,
+        },
+      },
+      orderBy: { openedAt: 'asc' },
+    })
+
+    const firstReviews = pullRequests
+      .map((pullRequest) => ({
+        openedAt: pullRequest.openedAt,
+        timeToReviewMins: pullRequest.reviews[0]?.timeToReviewMins ?? null,
+      }))
+      .filter((review): review is { openedAt: Date; timeToReviewMins: number } => review.timeToReviewMins != null)
+
+    const weeks = new Map<string, number[]>()
+    for (const review of firstReviews) {
+      const weekStart = new Date(review.openedAt)
+      weekStart.setUTCHours(0, 0, 0, 0)
+      weekStart.setUTCDate(weekStart.getUTCDate() - weekStart.getUTCDay())
+      const week = weekStart.toISOString().slice(0, 10)
+      weeks.set(week, [...(weeks.get(week) ?? []), review.timeToReviewMins / 60])
+    }
+
+    const weekly = [...weeks.entries()].map(([week, values]) => ({
+      week,
+      averageHours: values.reduce((total, value) => total + value, 0) / values.length,
+      reviewedPrs: values.length,
+    }))
+
+    const averageHours =
+      firstReviews.length > 0
+        ? firstReviews.reduce((total, review) => total + review.timeToReviewMins / 60, 0) / firstReviews.length
+        : null
+
+    return {
+      averageHours,
+      reviewedPullRequests: firstReviews.length,
       weeks: weekly,
     }
   })

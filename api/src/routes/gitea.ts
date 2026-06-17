@@ -26,10 +26,18 @@ type GiteaPullRequest = {
   number: number
   title: string
   state: string
+  merged?: boolean
   user?: { login?: string; username?: string } | null
   created_at: string
   merged_at: string | null
   closed_at: string | null
+}
+
+type GiteaReview = {
+  id: number
+  state: string
+  submitted_at: string
+  user?: { login?: string; username?: string } | null
 }
 
 const getBearerToken = (request: FastifyRequest) => {
@@ -63,6 +71,13 @@ const giteaHeaders = () => {
 
 const providerRepoId = (id: number) => `gitea:${id}`
 const providerCommitSha = (repoId: string, sha: string) => `gitea:${repoId}:${sha}`
+
+const giteaMergedAt = (pullRequest: GiteaPullRequest) => {
+  const mergedAt = pullRequest.merged_at || (pullRequest.merged || pullRequest.state === 'merged' ? pullRequest.closed_at : null)
+  return mergedAt ? new Date(mergedAt) : null
+}
+
+const giteaState = (pullRequest: GiteaPullRequest) => (giteaMergedAt(pullRequest) ? 'merged' : pullRequest.state)
 
 export async function giteaRoutes(app: FastifyInstance) {
   const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
@@ -116,6 +131,20 @@ export async function giteaRoutes(app: FastifyInstance) {
       })
       .json<GiteaPullRequest[]>()
 
+    const reviewsByPr = new Map<number, GiteaReview[]>()
+    await Promise.all(
+      pullRequests.map(async (pullRequest) => {
+        try {
+          const reviews = await got
+            .get(`${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/reviews`, { headers })
+            .json<GiteaReview[]>()
+          reviewsByPr.set(pullRequest.number, reviews)
+        } catch {
+          reviewsByPr.set(pullRequest.number, [])
+        }
+      }),
+    )
+
     const synced = await prisma.$transaction(async (tx) => {
       const savedCommits = await Promise.all(
         commits.map((commit) =>
@@ -150,22 +179,57 @@ export async function giteaRoutes(app: FastifyInstance) {
               repoId: repo.id,
               githubPrNumber: pullRequest.number,
               title: pullRequest.title,
-              state: pullRequest.merged_at ? 'merged' : pullRequest.state,
+              state: giteaState(pullRequest),
               authorGithubId: pullRequest.user?.login ?? pullRequest.user?.username ?? 'ghost',
               openedAt: new Date(pullRequest.created_at),
-              mergedAt: pullRequest.merged_at ? new Date(pullRequest.merged_at) : null,
+              mergedAt: giteaMergedAt(pullRequest),
               closedAt: pullRequest.closed_at ? new Date(pullRequest.closed_at) : null,
             },
             update: {
               title: pullRequest.title,
-              state: pullRequest.merged_at ? 'merged' : pullRequest.state,
+              state: giteaState(pullRequest),
               authorGithubId: pullRequest.user?.login ?? pullRequest.user?.username ?? 'ghost',
               openedAt: new Date(pullRequest.created_at),
-              mergedAt: pullRequest.merged_at ? new Date(pullRequest.merged_at) : null,
+              ...(giteaMergedAt(pullRequest) ? { mergedAt: giteaMergedAt(pullRequest) } : {}),
               closedAt: pullRequest.closed_at ? new Date(pullRequest.closed_at) : null,
             },
           }),
         ),
+      )
+
+      const savedReviews = await Promise.all(
+        savedPullRequests.flatMap((savedPullRequest) => {
+          const sourcePullRequest = pullRequests.find(
+            (pullRequest) => pullRequest.number === savedPullRequest.githubPrNumber,
+          )
+          const reviews = reviewsByPr.get(savedPullRequest.githubPrNumber) ?? []
+
+          if (!sourcePullRequest) return []
+
+          return reviews.map((review) => {
+            const submittedAt = new Date(review.submitted_at)
+            const openedAt = new Date(sourcePullRequest.created_at)
+            const timeToReviewMins = Math.max(0, Math.round((submittedAt.getTime() - openedAt.getTime()) / 1000 / 60))
+
+            return tx.prReview.upsert({
+              where: { id: `gitea:${savedPullRequest.id}:${review.id}` },
+              create: {
+                id: `gitea:${savedPullRequest.id}:${review.id}`,
+                prId: savedPullRequest.id,
+                reviewerGithubId: review.user?.login ?? review.user?.username ?? 'ghost',
+                state: review.state.toLowerCase(),
+                timeToReviewMins,
+                submittedAt,
+              },
+              update: {
+                reviewerGithubId: review.user?.login ?? review.user?.username ?? 'ghost',
+                state: review.state.toLowerCase(),
+                timeToReviewMins,
+                submittedAt,
+              },
+            })
+          })
+        }),
       )
 
       await tx.repo.update({
@@ -176,6 +240,7 @@ export async function giteaRoutes(app: FastifyInstance) {
       return {
         commits: savedCommits.length,
         pullRequests: savedPullRequests.length,
+        reviews: savedReviews.length,
       }
     })
 

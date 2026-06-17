@@ -25,7 +25,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"
     networks:
       - devpulse_net
     healthcheck:
@@ -64,6 +64,7 @@ services:
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
       ML_SERVICE_URL: http://ml-service:8001
       PORT: 3000
+      HOST: 0.0.0.0
       NODE_ENV: development
     ports:
       - "3000:3000"

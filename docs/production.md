@@ -2,6 +2,29 @@
 
 DevPulse has two supported production shapes.
 
+## Vercel + Render
+
+This is the recommended managed deployment:
+
+- Vercel serves the Vite frontend from the `web` root directory.
+- Render provisions the API, queue worker, private ML service, Postgres, and
+  Redis from `render.yaml`.
+
+1. Push the repository, then create a Render Blueprint from `render.yaml`.
+2. Supply the prompted GitHub OAuth and optional Gitea values. Initially set
+   `FRONTEND_URL` to the future Vercel URL and set `GITHUB_CALLBACK_URL` to
+   `https://devpulse-api.onrender.com/auth/github/callback`.
+3. In Vercel, import this repository, choose `web` as the root directory, and
+   add `VITE_API_URL=https://devpulse-api.onrender.com`.
+4. Deploy Vercel, then replace `FRONTEND_URL` in Render with the actual Vercel
+   production URL.
+5. Add the production callback URL to the GitHub OAuth application's callback
+   URL list.
+
+The Blueprint uses free Postgres, Redis, and API plans where available. The
+always-on queue worker and private model service use Render Starter instances,
+and therefore require billing. Model artifacts live on the ML service disk.
+
 ## Single-host Docker Compose
 
 This is the simplest complete deployment because Postgres, Redis, the worker,

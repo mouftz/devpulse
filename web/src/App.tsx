@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
-  ArrowUpRight,
   BrainCircuit,
   CheckCircle2,
   ChevronDown,
   Eye,
-  Flame,
   GitBranch,
   Github,
   Link2Off,
@@ -358,10 +356,6 @@ export function App() {
   useEffect(() => {
     void load()
   }, [rangeDays, analyticsScope])
-
-  const topRepos = useMemo(() => {
-    return [...(overview?.repos ?? [])].sort((a, b) => b.commits - a.commits).slice(0, 5)
-  }, [overview])
 
   const sortedRepos = useMemo(() => {
     const query = repoSearch.trim().toLowerCase()
@@ -767,14 +761,7 @@ export function App() {
       </section>
 
       <section className="dashboard">
-        <div className="metric-grid">
-          <Metric title="Repos" value={totals.repos} icon={<GitBranch size={20} />} />
-          <Metric title="Synced" value={totals.syncedRepos} icon={<CheckCircle2 size={20} />} />
-          <Metric title="Commits" value={totals.commits} icon={<Activity size={20} />} />
-          <Metric title="Pull Requests" value={totals.pullRequests} icon={<Flame size={20} />} />
-        </div>
-
-        <div className="metric-grid insight-metric-grid">
+        <div className="metric-grid insight-metric-grid summary-metrics">
           <Metric title="Active Repos" value={insightSummary.activeRepos} icon={<GitBranch size={20} />} detail={rangeLabel} />
           <Metric title="Merged PRs" value={insightSummary.mergedPullRequests} icon={<CheckCircle2 size={20} />} detail={rangeLabel} />
           <Metric
@@ -826,7 +813,7 @@ export function App() {
           <ContributionGraph days={activity?.days ?? []} />
         </section>
 
-        <div className="content-grid">
+        <div className="repository-workspace">
           <section className="glass-panel repo-panel">
             <div className="section-title">
               <div>
@@ -935,33 +922,7 @@ export function App() {
             )}
           </section>
 
-          <aside className="glass-panel insight-panel">
-            <div className="section-title compact">
-              <div>
-                <p className="eyebrow">Momentum</p>
-                <h2>Most active</h2>
-              </div>
-              <ArrowUpRight size={20} />
-            </div>
-            <div className="rank-list">
-              {topRepos.length ? (
-                topRepos.map((repo, index) => (
-                  <div className="rank-row" key={repo.id}>
-                    <span>{index + 1}</span>
-                    <div>
-                      <strong>{repo.fullName.split('/')[1]}</strong>
-                      <p>{repo.commits} commits</p>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="empty-state small">No synced repositories yet.</div>
-              )}
-            </div>
-          </aside>
-        </div>
-
-        <section className="glass-panel detail-panel">
+          <section className="glass-panel detail-panel">
           <div className="section-title">
             <div>
               <p className="eyebrow">Repo Detail</p>
@@ -1113,7 +1074,8 @@ export function App() {
               <ReviewLatencyChart latency={reviewLatency} />
             </div>
           ) : null}
-        </section>
+          </section>
+        </div>
       </section>
 
       {managerOpen ? (

@@ -1,6 +1,9 @@
 import got from 'got'
 
-const ML_SERVICE_URL = (process.env.ML_SERVICE_URL ?? '').replace(/\/$/, '')
+const rawMlServiceUrl = (process.env.ML_SERVICE_URL ?? '').replace(/\/$/, '')
+const ML_SERVICE_URL = rawMlServiceUrl && !rawMlServiceUrl.includes('://')
+  ? `http://${rawMlServiceUrl}`
+  : rawMlServiceUrl
 const ML_SERVICE_TOKEN = process.env.ML_SERVICE_TOKEN
 const mlOptions = {
   timeout: { request: 120_000 },

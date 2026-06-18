@@ -401,7 +401,7 @@ button:disabled:hover {
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
   gap: 16px;
   align-items: stretch;
-  max-width: 1180px;
+  max-width: 1360px;
   margin: 34px auto 0;
 }
 
@@ -578,7 +578,7 @@ h2 {
 
 .dashboard {
   position: relative;
-  max-width: 1180px;
+  max-width: 1360px;
   margin: 34px auto 0;
   padding: 0 clamp(18px, 4vw, 56px) 56px;
 }
@@ -621,10 +621,31 @@ h2 {
   margin-top: 14px;
 }
 
+.summary-metrics .metric-card {
+  min-height: 112px;
+  padding: 16px 18px;
+}
+
+.summary-metrics .metric-card span {
+  margin-top: 12px;
+}
+
+.summary-metrics .metric-card strong {
+  font-size: 1.55rem;
+}
+
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.6fr) minmax(280px, 0.8fr);
   gap: 16px;
+  margin-top: 16px;
+}
+
+.repository-workspace {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.72fr) minmax(620px, 1.55fr);
+  gap: 16px;
+  align-items: start;
   margin-top: 16px;
 }
 
@@ -808,6 +829,50 @@ h2 {
 .repo-panel,
 .insight-panel {
   padding: 22px;
+}
+
+.repository-workspace .repo-panel {
+  position: sticky;
+  top: 18px;
+}
+
+.repository-workspace .repo-filter-bar {
+  grid-template-columns: 1fr;
+}
+
+.repository-workspace .filter-controls {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.repository-workspace .repo-filter-control {
+  flex: 1;
+}
+
+.repository-workspace .repo-filter-control button {
+  min-width: 64px;
+}
+
+.repository-workspace .repo-status-select {
+  flex: 1;
+  min-width: 130px;
+}
+
+.repository-workspace .repo-table {
+  max-height: 720px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.repository-workspace .repo-row {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.repository-workspace .repo-stats {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
 }
 
 .repo-tools {
@@ -1080,7 +1145,7 @@ h2 {
 }
 
 .detail-panel {
-  margin-top: 16px;
+  margin-top: 0;
   padding: 22px;
 }
 
@@ -1908,6 +1973,18 @@ h2 {
   .auth-layout,
   .workspace-hero {
     grid-template-columns: 1fr;
+  }
+
+  .repository-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .repository-workspace .repo-panel {
+    position: static;
+  }
+
+  .repository-workspace .repo-table {
+    max-height: 520px;
   }
 
   .metric-grid {

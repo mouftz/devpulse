@@ -1,0 +1,137 @@
+databases:
+  - name: devpulse-postgres
+    plan: free
+    region: ohio
+    databaseName: devpulse
+    postgresMajorVersion: "16"
+    ipAllowList: []
+
+services:
+  - type: keyvalue
+    name: devpulse-redis
+    plan: free
+    region: ohio
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+  - type: pserv
+    name: devpulse-ml
+    runtime: docker
+    plan: starter
+    region: ohio
+    dockerfilePath: ./ml-service/Dockerfile
+    dockerContext: ./ml-service
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devpulse-postgres
+          property: connectionString
+      - key: ML_SERVICE_TOKEN
+        generateValue: true
+      - key: PORT
+        value: 8001
+    disk:
+      name: devpulse-models
+      mountPath: /models
+      sizeGB: 1
+
+  - type: web
+    name: devpulse-api
+    runtime: docker
+    plan: free
+    region: ohio
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    healthCheckPath: /health
+    dockerCommand: sh -c "npx prisma migrate deploy && node dist/index.js"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devpulse-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: devpulse-redis
+          type: keyvalue
+          property: connectionString
+      - key: ML_SERVICE_URL
+        fromService:
+          name: devpulse-ml
+          type: pserv
+          property: hostport
+      - key: ML_SERVICE_TOKEN
+        fromService:
+          name: devpulse-ml
+          type: pserv
+          envVarKey: ML_SERVICE_TOKEN
+      - key: JWT_SECRET
+        generateValue: true
+      - key: TOKEN_ENCRYPTION_KEY
+        generateValue: true
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CALLBACK_URL
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: GITEA_BASE_URL
+        sync: false
+      - key: GITEA_TOKEN
+        sync: false
+      - key: HOST
+        value: 0.0.0.0
+      - key: NODE_ENV
+        value: production
+
+  - type: worker
+    name: devpulse-worker
+    runtime: docker
+    plan: starter
+    region: ohio
+    dockerfilePath: ./api/Dockerfile
+    dockerContext: ./api
+    dockerCommand: node dist/worker.js
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: devpulse-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: devpulse-redis
+          type: keyvalue
+          property: connectionString
+      - key: ML_SERVICE_URL
+        fromService:
+          name: devpulse-ml
+          type: pserv
+          property: hostport
+      - key: ML_SERVICE_TOKEN
+        fromService:
+          name: devpulse-ml
+          type: pserv
+          envVarKey: ML_SERVICE_TOKEN
+      - key: TOKEN_ENCRYPTION_KEY
+        fromService:
+          name: devpulse-api
+          type: web
+          envVarKey: TOKEN_ENCRYPTION_KEY
+      - key: GITEA_BASE_URL
+        fromService:
+          name: devpulse-api
+          type: web
+          envVarKey: GITEA_BASE_URL
+      - key: GITEA_TOKEN
+        fromService:
+          name: devpulse-api
+          type: web
+          envVarKey: GITEA_TOKEN
+      - key: SYNC_INTERVAL_SECONDS
+        value: 86400
+      - key: RUN_ON_START
+        value: true
+      - key: NODE_ENV
+        value: production

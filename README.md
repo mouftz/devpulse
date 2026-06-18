@@ -1,79 +1,74 @@
 # DevPulse
 
-DevPulse is a developer analytics app that connects to code hosting providers,
-syncs repository activity, and turns commits and pull requests into a clean
-dashboard.
+DevPulse is a developer analytics workspace for GitHub and Gitea repositories.
+It connects to your repos, syncs commits and pull requests into Postgres, and
+turns that raw activity into a dashboard with commit rhythm, repo-level metrics,
+PR cycle trends, review latency, sync health, and repository management tools.
 
-The goal is to make engineering activity easier to understand at a glance:
-which repos are active, how often work is landing, and where team/product
-signals can eventually feed deeper analytics and ML scoring.
+The current version is focused on one clean loop:
+
+1. Connect GitHub with OAuth.
+2. Optionally layer in Gitea from the dashboard.
+3. Discover repositories.
+4. Sync them in the background through Redis.
+5. Explore repo and contributor activity in the UI.
 
 ## What Works Today
 
-- GitHub OAuth login
-- Browser session cookie after login
-- GitHub and Gitea repository discovery
-- One-click sync for all visible repositories
-- Commit and pull request ingestion into Postgres
-- Dashboard totals for repos, synced repos, commits, and pull requests
-- GitHub-style contribution heatmap for commit activity
-- Repository table and “most active” ranking
-- Date range controls and `Mine` / `All` contribution scope
-- PR cycle and review latency analytics
-- Repository visibility controls for hiding repos from the dashboard
+- GitHub OAuth sign-in with an HTTP-only session cookie
+- Optional Gitea repository discovery using `GITEA_BASE_URL` and `GITEA_TOKEN`
+- Background repo sync queue backed by Redis
+- Manual sync actions for all visible repos or a single repo
+- Nightly / catch-up sync worker flow
+- Repo visibility management for hiding repos from the dashboard
+- Dashboard totals for repos, commits, pull requests, and active repos
+- Contribution heatmap with date range and `Mine` / `All` scope
+- Repo-level detail view with:
+  - commit trend
+  - PR cycle trend
+  - review latency
+  - sync status and last sync error details
+- Provider-aware repo handling for GitHub and Gitea
+- API smoke tests and helper tests
 
-## Product Direction
+## Stack
 
-DevPulse is being built as a developer analytics SaaS. The current version is
-focused on proving the core data loop:
-
-1. Connect GitHub or configure Gitea.
-2. Save the authenticated user.
-3. Discover repositories.
-4. Sync commits and pull requests.
-5. Display useful engineering activity in the dashboard.
-
-Next steps are deeper analytics polish, background sync reliability, anomaly
-detection, and ML-powered burnout risk scoring.
-
-## Tech Stack
-
-| Layer | Technology |
+| Layer | Tech |
 | --- | --- |
 | Frontend | React, Vite, TypeScript |
-| API | Node.js, Fastify, TypeScript |
+| API | Fastify, TypeScript |
 | ORM | Prisma |
 | Database | PostgreSQL |
-| Cache / Queue | Redis |
-| ML service | Python, FastAPI, scikit-learn |
-| Containers | Docker Compose |
-| Monitoring | Prometheus, Grafana |
+| Queue / cache | Redis |
+| ML scaffold | FastAPI, scikit-learn |
+| Local orchestration | Docker Compose |
+| Monitoring scaffold | Prometheus, Grafana |
 
 ## Architecture
 
 ```text
-GitHub OAuth
-    |
-    v
-Fastify API  --->  PostgreSQL
-    |                |
-    |                v
-    |          commits, PRs, repos, users
-    |
-    v
-React Dashboard
+GitHub OAuth / Gitea token
+           |
+           v
+      Fastify API
+           |
+   -------------------
+   |        |        |
+   v        v        v
+Postgres   Redis   Frontend
+           |
+           v
+      Sync worker
 ```
 
-The API owns authentication, GitHub API calls, database writes, and analytics
-responses. The frontend reads from the API using the browser session cookie set
-after GitHub OAuth.
-
-The ML and ETL folders are scaffolded for the larger product direction. The
-main working path right now is the web app plus API plus Postgres.
+The API owns auth, provider sync, database writes, analytics responses, and
+repo visibility state. The worker consumes Redis jobs and performs background
+syncs. The frontend reads everything from the API and uses the session cookie
+set after OAuth.
 
 ## Local Setup
 
-### 1. Install Dependencies
+### 1. Install dependencies
 
 ```bash
 cd api
@@ -83,44 +78,48 @@ cd ../web
 npm install
 ```
 
-### 2. Create API Environment File
+### 2. Create env files
 
-Copy `api/.env.example` to `api/.env`, then fill in your local values:
+The root `.env` is used by `docker-compose.yml`.
+
+```bash
+cp .env.example .env
+```
+
+Fill in your provider values:
 
 ```env
 DATABASE_URL=postgresql://devpulse:devpulse_secret@localhost:5433/devpulse_db
-JWT_SECRET=change_me_in_development
-GITHUB_CLIENT_ID=your_github_oauth_client_id
-GITHUB_CLIENT_SECRET=your_github_oauth_client_secret
+JWT_SECRET=change_me_in_production
+
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
 GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
-GITEA_BASE_URL=https://your-gitea.example.com
-GITEA_TOKEN=your_gitea_access_token
+
+GITEA_BASE_URL=
+GITEA_TOKEN=
+
+REDIS_URL=redis://localhost:6379
+SYNC_INTERVAL_SECONDS=86400
+RUN_ON_START=true
+
 FRONTEND_URL=http://localhost:5173
 PORT=3000
 HOST=127.0.0.1
-NODE_ENV=development
 ```
 
 Do not commit real secrets.
 
-For Docker Compose, copy the root `.env.example` to `.env` and fill in the
-provider credentials there too. The root `.env` is used by `docker-compose.yml`;
-`api/.env` is used when you run the API directly with Node.
-
 ### 3. Start Postgres and Redis
-
-From the project root:
 
 ```bash
 docker compose up postgres redis
 ```
 
-This project maps Postgres to local port `5433` to avoid conflicts with other
-local Postgres installs.
+Postgres is mapped to local port `5433` to avoid clashing with other local
+installs.
 
-### 4. Run Database Migrations
-
-In a second terminal:
+### 4. Run Prisma migrations
 
 ```bash
 cd api
@@ -141,9 +140,16 @@ Health check:
 http://localhost:3000/health
 ```
 
-### 6. Start the Frontend
+### 6. Start the sync worker
 
 In another terminal:
+
+```bash
+cd api
+npm run worker:dev
+```
+
+### 7. Start the frontend
 
 ```bash
 cd web
@@ -164,89 +170,113 @@ Create a GitHub OAuth app and use this callback URL:
 http://localhost:3000/auth/github/callback
 ```
 
-Put the app’s client ID and client secret in `api/.env`.
+Put the client ID and client secret in the root `.env`. After login, the API
+stores the GitHub access token, signs a `devpulse_token` cookie, and redirects
+back to the frontend.
 
-When you click “Connect GitHub” in the dashboard, the API will complete OAuth,
-save the user, set a local session cookie, and redirect back to the frontend.
+## Helpful Commands
 
-## Useful API Routes
+### API
+
+```bash
+cd api
+npm run dev
+npm run worker:dev
+npm test
+```
+
+### Frontend
+
+```bash
+cd web
+npm run dev
+npm run build
+npm test
+```
+
+## Main API Routes
 
 | Route | Method | Purpose |
 | --- | --- | --- |
 | `/health` | GET | API health check |
 | `/auth/github` | GET | Start GitHub OAuth |
 | `/auth/github/callback` | GET | GitHub OAuth callback |
-| `/auth/me` | GET | Current logged-in user |
+| `/auth/me` | GET | Current session user |
 | `/auth/logout` | POST | Clear session cookie |
+| `/auth/system` | GET | API / provider / queue status |
 | `/github/repos` | GET | Discover and save GitHub repos |
-| `/github/repos/manage` | GET | List visible and hidden repositories |
-| `/github/repos/sync-all` | GET/POST | Sync all visible GitHub repos |
-| `/github/repos/:repoId/sync` | POST | Sync one repository |
-| `/github/repos/:repoId/visibility` | POST/PATCH | Hide or restore a repository |
-| `/github/repos/:repoId` | DELETE | Hide a repository from DevPulse |
+| `/github/repos/manage` | GET | Visible + hidden repo manager data |
+| `/github/repos/sync-all/background` | POST | Queue all visible GitHub repos |
+| `/github/repos/:repoId/sync/background` | POST | Queue one GitHub repo |
+| `/github/repos/:repoId/visibility` | POST/PATCH | Hide or restore a repo |
 | `/github/repos/:repoId/summary` | GET | Repo-level metrics |
 | `/github/repos/:repoId/pr-cycle` | GET | Weekly PR cycle trend |
-| `/github/repos/:repoId/review-latency` | GET | Weekly review latency trend |
+| `/github/repos/:repoId/review-latency` | GET | Weekly review latency |
 | `/github/overview` | GET | Dashboard totals and repo list |
-| `/github/activity` | GET | Daily commit counts for the heatmap |
+| `/github/activity` | GET | Daily commit counts |
+| `/github/insights` | GET | High-level dashboard insights |
 | `/gitea/repos` | GET | Discover and save Gitea repos |
-| `/gitea/repos/sync-all` | GET/POST | Sync all saved Gitea repos |
-| `/gitea/repos/:repoId/sync` | POST | Sync one Gitea repository |
-| `/gitea/repos/:repoId` | DELETE | Hide a Gitea repository from DevPulse |
+| `/gitea/repos/sync-all/background` | POST | Queue all visible Gitea repos |
+| `/gitea/repos/:repoId/sync/background` | POST | Queue one Gitea repo |
 
-## Project Structure
+## Project Layout
 
 ```text
 devpulse/
-├── api/                 # Fastify API, Prisma schema, GitHub sync routes
-├── web/                 # React/Vite dashboard
-├── ml-service/          # FastAPI ML service scaffold
-├── etl/                 # Background GitHub ingestion scaffold
-├── infra/monitoring/    # Prometheus config
-├── docker-compose.yml   # Local Postgres, Redis, services
+├── api/             # Fastify API, Prisma schema, worker, tests
+├── web/             # React dashboard
+├── ml-service/      # ML service scaffold
+├── etl/             # older ETL scaffold
+├── infra/           # monitoring / infra config
+├── docker-compose.yml
 └── README.md
 ```
 
-## Development Notes
+## Testing
 
-- The frontend expects the API at `http://localhost:3000`.
-- The API sets an HTTP-only `devpulse_token` cookie after GitHub login.
-- The dashboard can sync all visible repositories from the UI.
-- Gitea support uses `GITEA_BASE_URL` and `GITEA_TOKEN` from `api/.env`.
-- The dashboard defaults to `Mine`, which filters analytics to the connected
-  GitHub username plus the saved Gitea username when available. Use `All` for
-  full repo/team-wide activity.
-- GitHub access tokens are stored in Postgres for local development; production
-  should encrypt them before writing to the database.
-- `npm audit` currently reports dependency advisories. Avoid
-  `npm audit fix --force` unless you are ready to handle breaking upgrades.
+Current test coverage includes:
 
-## Roadmap
+- API helper tests
+- API app / route smoke tests
+- frontend dashboard utility tests
+
+Run them with:
+
+```bash
+cd api && npm test
+cd web && npm test
+```
+
+## What’s Still Left
+
+### Ingest / data
+
+- Deeper provider ingest hardening for larger real-world repos
+- More route-level test coverage for sync flows and analytics endpoints
 
 ### Analytics
 
-- Add richer repository filtering beyond the current sort and `Mine` / `All` scope.
-- Add more detailed per-repo activity charts beyond the compact commit bars.
-- Expand PR cycle and review latency charts with labels, deltas, and drill-downs.
-- Polish Manage Repos later with filter chips, restore-all-hidden, and stronger
-  hidden/visible empty states.
+- More polished per-repo charts and trend explanations
+- More dashboard refinement around filtering and comparison
 
 ### Infrastructure
 
-- Harden background sync jobs. The ETL worker now runs on a configurable
-  interval and enqueues ML scoring jobs, but it still needs production-grade
-  retry/backoff and observability.
-- Keep generated OS files out of Git. `.DS_Store` is ignored and should stay
-  untracked.
+- Stronger worker retry / backoff behavior
+- More observability around sync failures and queue health
 
-### ML Pipeline
+### Product
 
-- Train the burnout predictor and anomaly detector on real ingested data.
-- Wire the ML service `/score` endpoint into the sync flow.
-- Store model outputs in the `ml_scores` table.
-- Surface burnout and anomaly scores in the dashboard.
+- More repo-manager polish
+- Settings and connection UX refinement
 
-### Deployment
+### Intentionally left for later
 
-- GCP Cloud Run and Cloud SQL setup.
-- GitHub Actions CI/CD pipeline.
+- ML scoring and dashboard ML cards
+- deployment, CI/CD, and production secret management
+
+## Notes
+
+- The frontend expects the API at `http://localhost:3000`.
+- The API currently stores GitHub access tokens in Postgres for local
+  development. Production should encrypt them before writing to the database.
+- `.DS_Store` is ignored and should stay untracked.

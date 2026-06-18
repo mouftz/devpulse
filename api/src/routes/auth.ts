@@ -218,7 +218,30 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     try {
-      app.jwt.verify<{ sub: string }>(token)
+      const payload = app.jwt.verify<{ sub: string }>(token)
+      const [queueDepth, repoStates, recentFailures] = await Promise.all([
+        getQueueDepth(),
+        prisma.repo.findMany({
+          where: { ownerId: payload.sub, isHidden: false },
+          select: { syncStatus: true },
+        }),
+        prisma.repo.findMany({
+          where: {
+            ownerId: payload.sub,
+            isHidden: false,
+            syncStatus: 'failed',
+            lastSyncError: { not: null },
+          },
+          select: { id: true, fullName: true, provider: true, lastSyncError: true, lastSyncFinishedAt: true },
+          orderBy: { lastSyncFinishedAt: 'desc' },
+          take: 5,
+        }),
+      ])
+
+      const statusCounts = repoStates.reduce<Record<string, number>>((counts, repo) => {
+        counts[repo.syncStatus] = (counts[repo.syncStatus] ?? 0) + 1
+        return counts
+      }, {})
 
       return {
         api: {
@@ -230,7 +253,17 @@ export async function authRoutes(app: FastifyInstance) {
         sync: {
           intervalSeconds: Number(process.env.SYNC_INTERVAL_SECONDS ?? 86400),
           runOnStart: String(process.env.RUN_ON_START ?? 'true') === 'true',
-          queueDepth: await getQueueDepth(),
+          queueDepth,
+          status: (statusCounts.failed ?? 0) > 0 ? 'degraded' : 'healthy',
+          repos: {
+            total: repoStates.length,
+            queued: statusCounts.queued ?? 0,
+            syncing: statusCounts.syncing ?? 0,
+            healthy: statusCounts.healthy ?? 0,
+            failed: statusCounts.failed ?? 0,
+            idle: statusCounts.idle ?? 0,
+          },
+          recentFailures,
         },
         providers: {
           githubOauthConfigured: Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),

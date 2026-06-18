@@ -21,6 +21,8 @@ The current version is focused on one clean loop:
 - Manual sync actions for all visible repos or a single repo
 - Nightly / catch-up sync worker flow
 - Repo visibility management for hiding repos from the dashboard
+- Bulk restore for hidden repositories
+- Repo-manager search, status/visibility filters, result counts, and quick reset
 - Dashboard totals for repos, commits, pull requests, and active repos
 - Contribution heatmap with date range and `Mine` / `All` scope
 - Repo-level detail view with:
@@ -28,8 +30,13 @@ The current version is focused on one clean loop:
   - PR cycle trend
   - review latency
   - sync status and last sync error details
+  - commit and pull-request comparisons against workspace averages
+  - stable hover readouts with weekly PR/review sample counts
 - Provider-aware repo handling for GitHub and Gitea
 - API smoke tests and helper tests
+- Queue payload validation and background-sync failure coverage
+- Settings diagnostics for queue depth, worker state, and recent sync failures
+- One-click retry for failed GitHub and Gitea syncs
 
 ## Stack
 
@@ -102,6 +109,10 @@ GITEA_TOKEN=
 REDIS_URL=redis://localhost:6379
 SYNC_INTERVAL_SECONDS=86400
 RUN_ON_START=true
+SYNC_MAX_ATTEMPTS=3
+SYNC_RETRY_BASE_MS=5000
+SYNC_RETRY_MAX_MS=60000
+PROVIDER_REQUEST_CONCURRENCY=5
 
 FRONTEND_URL=http://localhost:5173
 PORT=3000
@@ -247,29 +258,10 @@ cd api && npm test
 cd web && npm test
 ```
 
-## What’s Still Left
+## Future Work
 
-### Ingest / data
-
-- Deeper provider ingest hardening for larger real-world repos
-- More route-level test coverage for sync flows and analytics endpoints
-
-### Analytics
-
-- More polished per-repo charts and trend explanations
-- More dashboard refinement around filtering and comparison
-
-### Infrastructure
-
-- Stronger worker retry / backoff behavior
-- More observability around sync failures and queue health
-
-### Product
-
-- More repo-manager polish
-- Settings and connection UX refinement
-
-### Intentionally left for later
+The core ingest, analytics, background-sync infrastructure, and product flows
+are implemented. The remaining areas are intentionally left for a later phase:
 
 - ML scoring and dashboard ML cards
 - deployment, CI/CD, and production secret management

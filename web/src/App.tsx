@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   CheckCircle2,
   ChevronDown,
+  Eye,
   Flame,
   GitBranch,
   Github,
@@ -20,10 +21,13 @@ import {
 import { AuthLanding } from './components/AuthLanding'
 import { WorkspaceSessionMenu } from './components/WorkspaceSessionMenu'
 import {
+  compareToWorkspaceAverage,
+  filterManagerRepos,
   getQueueNotice,
   getSyncHealthSummary,
   getSyncStatusLabel,
   matchesSyncFilter,
+  summarizeManagerRepos,
 } from './lib/dashboard-utils.js'
 
 const API_URL = 'http://localhost:3000'
@@ -79,6 +83,7 @@ type LinePoint = {
   key: string
   label: string
   value: number
+  detail?: string
 }
 
 type ActivitySummary = {
@@ -150,6 +155,22 @@ type SystemStatus = {
     intervalSeconds: number
     runOnStart: boolean
     queueDepth: number
+    status: 'healthy' | 'degraded'
+    repos: {
+      total: number
+      queued: number
+      syncing: number
+      healthy: number
+      failed: number
+      idle: number
+    }
+    recentFailures: Array<{
+      id: string
+      fullName: string
+      provider: string
+      lastSyncError: string
+      lastSyncFinishedAt: string | null
+    }>
   }
   providers: {
     githubOauthConfigured: boolean
@@ -270,13 +291,16 @@ export function App() {
   const [managerOpen, setManagerOpen] = useState(false)
   const [managerRepos, setManagerRepos] = useState<ManagerRepo[]>([])
   const [managerLoading, setManagerLoading] = useState(false)
+  const [restoringRepos, setRestoringRepos] = useState(false)
   const [managerQuery, setManagerQuery] = useState('')
   const [managerSyncFilter, setManagerSyncFilter] = useState<'all' | 'healthy' | 'queued' | 'syncing' | 'failed'>(
     'all',
   )
+  const [managerVisibilityFilter, setManagerVisibilityFilter] = useState<'all' | 'visible' | 'hidden'>('all')
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [unlinkingProvider, setUnlinkingProvider] = useState<'github' | 'gitea' | null>(null)
+  const [connectingProvider, setConnectingProvider] = useState<'gitea' | null>(null)
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [notice, setNotice] = useState<NoticeState>(null)
 
@@ -355,29 +379,11 @@ export function App() {
   }, [overview, selectedRepoId])
 
   const filteredManagerRepos = useMemo(() => {
-    const query = managerQuery.trim().toLowerCase()
-    return managerRepos.filter((repo) => {
-      const matchesQuery =
-        !query || repo.fullName.toLowerCase().includes(query) || repo.provider.includes(query)
-      const matchesStatus = managerSyncFilter === 'all' || repo.syncStatus === managerSyncFilter
-      return matchesQuery && matchesStatus
-    })
-  }, [managerQuery, managerRepos, managerSyncFilter])
+    return filterManagerRepos(managerRepos, managerQuery, managerSyncFilter, managerVisibilityFilter)
+  }, [managerQuery, managerRepos, managerSyncFilter, managerVisibilityFilter])
 
   const managerStatusCounts = useMemo(() => {
-    return managerRepos.reduce(
-      (summary, repo) => {
-        summary[repo.syncStatus] += 1
-        return summary
-      },
-      {
-        healthy: 0,
-        queued: 0,
-        syncing: 0,
-        failed: 0,
-        idle: 0,
-      } satisfies Record<'healthy' | 'queued' | 'syncing' | 'failed' | 'idle', number>,
-    )
+    return summarizeManagerRepos(managerRepos)
   }, [managerRepos])
 
   useEffect(() => {
@@ -514,17 +520,45 @@ export function App() {
     }
   }
 
+  const restoreAllHiddenRepos = async () => {
+    setRestoringRepos(true)
+    setNotice(null)
+    try {
+      const result = await api<{ restored: number }>('/github/repos/visibility/restore-all', { method: 'POST' })
+      await Promise.all([refreshDashboard(), loadManagerRepos()])
+      setNotice({
+        message: result.restored === 1 ? 'Restored 1 repository.' : `Restored ${result.restored} repositories.`,
+        tone: result.restored > 0 ? 'success' : 'info',
+      })
+    } catch (error) {
+      setNotice({ message: `Could not restore repositories: ${errorMessage(error)}`, tone: 'error' })
+    } finally {
+      setRestoringRepos(false)
+    }
+  }
+
   const closeManager = () => {
     setManagerOpen(false)
     setManagerQuery('')
+    setManagerVisibilityFilter('all')
+    setManagerSyncFilter('all')
+  }
+
+  const loadSystemStatus = async () => {
+    try {
+      const nextStatus = await api<SystemStatus>('/auth/system')
+      setSystemStatus(nextStatus)
+      return nextStatus
+    } catch {
+      setSystemStatus(null)
+      return null
+    }
   }
 
   const openSettings = () => {
     setAccountMenuOpen(false)
     setSettingsOpen(true)
-    void api<SystemStatus>('/auth/system')
-      .then(setSystemStatus)
-      .catch(() => setSystemStatus(null))
+    void loadSystemStatus()
   }
 
   const closeSettings = () => {
@@ -546,6 +580,42 @@ export function App() {
     }
   }
 
+  const connectGitea = async () => {
+    setConnectingProvider('gitea')
+    setNotice(null)
+    try {
+      await api('/gitea/repos')
+      const me = await api<{ user: User }>('/auth/me')
+      setUser(me.user)
+      await refreshDashboard()
+      setNotice({ message: 'Gitea connected and repositories refreshed.', tone: 'success' })
+    } catch (error) {
+      setNotice({ message: `Could not connect Gitea: ${errorMessage(error)}`, tone: 'error' })
+    } finally {
+      setConnectingProvider(null)
+    }
+  }
+
+  const retryFailedRepo = async (failure: SystemStatus['sync']['recentFailures'][number]) => {
+    setSyncingRepoId(failure.id)
+    setNotice(null)
+    try {
+      const result = await api<{ queued: number; queueDepth: number }>(
+        `/${failure.provider}/repos/${failure.id}/sync/background`,
+        { method: 'POST' },
+      )
+      await Promise.all([refreshDashboard(), loadSystemStatus()])
+      setNotice({
+        message: getQueueNotice(result.queued, result.queueDepth, failure.fullName),
+        tone: 'success',
+      })
+    } catch (error) {
+      setNotice({ message: `Could not retry ${failure.fullName}: ${errorMessage(error)}`, tone: 'error' })
+    } finally {
+      setSyncingRepoId(null)
+    }
+  }
+
   const logout = async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => null)
     setUser(null)
@@ -562,6 +632,13 @@ export function App() {
   }
 
   const totals = overview?.totals ?? { repos: 0, syncedRepos: 0, commits: 0, pullRequests: 0 }
+  const repoCountForAverage = Math.max(overview?.repos.length ?? 0, 1)
+  const selectedCommitComparison = selectedRepo
+    ? compareToWorkspaceAverage(repoSummary?.metrics.commits ?? selectedRepo.commits, totals.commits, repoCountForAverage)
+    : null
+  const selectedPrComparison = selectedRepo
+    ? compareToWorkspaceAverage(repoSummary?.metrics.pullRequests ?? selectedRepo.pullRequests, totals.pullRequests, repoCountForAverage)
+    : null
   const insightSummary = insights ?? {
     windowDays: rangeDays,
     activeRepos: 0,
@@ -920,6 +997,10 @@ export function App() {
                   </strong>
                 </div>
               </div>
+              <div className="repo-comparison-strip">
+                <ComparisonMetric label="Commit volume" comparison={selectedCommitComparison} />
+                <ComparisonMetric label="Pull request volume" comparison={selectedPrComparison} />
+              </div>
             </>
           ) : (
             <div className="empty-state small">Click a repo row to inspect it.</div>
@@ -994,14 +1075,38 @@ export function App() {
             </div>
 
             <div className="manager-actions">
-              <button className="primary-button" onClick={syncAll} disabled={syncing || !overview?.repos.length}>
-                {syncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
-                Sync All Visible
-              </button>
-              <span className="subtle-label">{managerRepos.filter((repo) => !repo.isHidden).length} visible · {managerRepos.filter((repo) => repo.isHidden).length} hidden</span>
+              <div className="manager-primary-actions">
+                <button className="primary-button" onClick={syncAll} disabled={syncing || !overview?.repos.length}>
+                  {syncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
+                  Sync All Visible
+                </button>
+                {managerStatusCounts.hidden > 0 ? (
+                  <button className="secondary-button" onClick={() => void restoreAllHiddenRepos()} disabled={restoringRepos}>
+                    {restoringRepos ? <Loader2 className="spin" size={18} /> : <Eye size={18} />}
+                    Show All Hidden
+                  </button>
+                ) : null}
+              </div>
+              <span className="subtle-label">{managerStatusCounts.visible} visible · {managerStatusCounts.hidden} hidden</span>
             </div>
 
             <div className="manager-filter-row">
+              <label className="manager-select">
+                <span className="subtle-label">Visibility</span>
+                <div className="manager-select-wrap">
+                  <select
+                    value={managerVisibilityFilter}
+                    onChange={(event) =>
+                      setManagerVisibilityFilter(event.target.value as 'all' | 'visible' | 'hidden')
+                    }
+                  >
+                    <option value="all">All repositories</option>
+                    <option value="visible">Visible ({managerStatusCounts.visible})</option>
+                    <option value="hidden">Hidden ({managerStatusCounts.hidden})</option>
+                  </select>
+                  <ChevronDown size={16} />
+                </div>
+              </label>
               <label className="manager-select">
                 <span className="subtle-label">Status</span>
                 <div className="manager-select-wrap">
@@ -1014,14 +1119,27 @@ export function App() {
                     }
                   >
                     <option value="all">All statuses</option>
-                    <option value="healthy">Healthy ({managerStatusCounts.healthy})</option>
-                    <option value="queued">Queued ({managerStatusCounts.queued})</option>
-                    <option value="syncing">Syncing ({managerStatusCounts.syncing})</option>
-                    <option value="failed">Failed ({managerStatusCounts.failed})</option>
+                    <option value="healthy">Healthy ({managerStatusCounts.statuses.healthy})</option>
+                    <option value="queued">Queued ({managerStatusCounts.statuses.queued})</option>
+                    <option value="syncing">Syncing ({managerStatusCounts.statuses.syncing})</option>
+                    <option value="failed">Failed ({managerStatusCounts.statuses.failed})</option>
                   </select>
                   <ChevronDown size={16} />
                 </div>
               </label>
+              {managerQuery || managerVisibilityFilter !== 'all' || managerSyncFilter !== 'all' ? (
+                <button
+                  className="secondary-button compact-button manager-reset-button"
+                  onClick={() => {
+                    setManagerQuery('')
+                    setManagerVisibilityFilter('all')
+                    setManagerSyncFilter('all')
+                  }}
+                >
+                  <X size={16} />
+                  Reset filters
+                </button>
+              ) : null}
             </div>
 
             <label className="manager-search">
@@ -1032,6 +1150,9 @@ export function App() {
                 placeholder="Search repos"
               />
             </label>
+            <span className="manager-result-count">
+              Showing {filteredManagerRepos.length} of {managerRepos.length} repositories
+            </span>
 
             <div className="manager-list">
               {managerLoading ? (
@@ -1064,7 +1185,13 @@ export function App() {
                   </div>
                 ))
               ) : (
-                <div className="empty-state">{managerQuery ? 'No repos match that search.' : 'No visible repos to manage.'}</div>
+                <div className="empty-state">
+                  {managerQuery
+                    ? 'No repos match that search.'
+                    : managerVisibilityFilter === 'hidden'
+                      ? 'No hidden repos match those filters.'
+                      : 'No repositories match those filters.'}
+                </div>
               )}
             </div>
           </section>
@@ -1106,15 +1233,9 @@ export function App() {
                 connected={user.giteaConnected}
                 detail={user.giteaConnected ? `Connected as ${user.giteaUsername}` : 'Disconnected. Gitea uses your local env token.'}
                 icon={<GitBranch size={20} />}
-                isBusy={unlinkingProvider === 'gitea'}
+                isBusy={unlinkingProvider === 'gitea' || connectingProvider === 'gitea'}
                 name="Gitea"
-                onConnect={() =>
-                  void api('/gitea/repos')
-                    .then(load)
-                    .catch((error) =>
-                      setNotice({ message: `Could not connect gitea: ${errorMessage(error)}`, tone: 'error' }),
-                    )
-                }
+                onConnect={() => void connectGitea()}
                 onUnlink={() => void unlinkProvider('gitea')}
               />
             </div>
@@ -1128,12 +1249,38 @@ export function App() {
                   <StatPill label="Sync cadence" value={formatInterval(systemStatus.sync.intervalSeconds)} />
                   <StatPill label="Run on start" value={systemStatus.sync.runOnStart ? 'Enabled' : 'Off'} />
                   <StatPill label="Queue depth" value={String(systemStatus.sync.queueDepth)} />
+                  <StatPill label="Worker health" value={systemStatus.sync.status === 'healthy' ? 'Healthy' : 'Degraded'} />
+                  <StatPill label="Syncing" value={String(systemStatus.sync.repos.syncing)} />
+                  <StatPill label="Queued repos" value={String(systemStatus.sync.repos.queued)} />
+                  <StatPill label="Failed repos" value={String(systemStatus.sync.repos.failed)} />
                   <StatPill label="GitHub OAuth" value={systemStatus.providers.githubOauthConfigured ? 'Ready' : 'Missing'} />
                   <StatPill label="Gitea env" value={systemStatus.providers.giteaConfigured ? 'Ready' : 'Missing'} />
                 </div>
               ) : (
                 <div className="empty-state small">System status is unavailable right now.</div>
               )}
+              {systemStatus?.sync.recentFailures.length ? (
+                <div className="sync-failure-list">
+                  <strong>Recent sync failures</strong>
+                  {systemStatus.sync.recentFailures.map((failure) => (
+                    <div className="sync-failure-row" key={failure.id}>
+                      <div>
+                        <strong>{failure.fullName}</strong>
+                        <span>{failure.provider} · {formatDate(failure.lastSyncFinishedAt)}</span>
+                      </div>
+                      <p>{failure.lastSyncError}</p>
+                      <button
+                        className="secondary-button compact-button"
+                        disabled={syncingRepoId === failure.id}
+                        onClick={() => void retryFailedRepo(failure)}
+                      >
+                        {syncingRepoId === failure.id ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                        Retry
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="settings-footer">
@@ -1187,6 +1334,7 @@ function ReviewLatencyChart({ latency }: { latency: ReviewLatency | null }) {
         key: week.week,
         label: formatWeekLabel(week.week),
         value: week.averageHours,
+        detail: `${week.reviewedPrs} reviewed ${week.reviewedPrs === 1 ? 'PR' : 'PRs'}`,
       }))}
       subtitle="First review response"
       tone="amber"
@@ -1207,6 +1355,7 @@ function PrCycleChart({ trend }: { trend: PrCycleTrend | null }) {
         key: week.week,
         label: formatWeekLabel(week.week),
         value: week.averageHours,
+        detail: `${week.mergedPrs} merged ${week.mergedPrs === 1 ? 'PR' : 'PRs'}`,
       }))}
       subtitle={trend?.trend === 'improving' ? 'Moving faster' : trend?.trend === 'slowing' ? 'Taking longer' : 'Holding steady'}
       tone={trend?.trend === 'slowing' ? 'rose' : 'mint'}
@@ -1294,8 +1443,9 @@ function ProviderSetting({
             Unlink
           </button>
         ) : (
-          <button className="secondary-button compact-button" onClick={onConnect}>
-            Connect
+          <button className="secondary-button compact-button" onClick={onConnect} disabled={isBusy}>
+            {isBusy ? <Loader2 className="spin" size={16} /> : null}
+            {isBusy ? 'Connecting' : 'Connect'}
           </button>
         )}
       </div>
@@ -1308,6 +1458,23 @@ function StatPill({ label, value }: { label: string; value: string }) {
     <div className="detail-stat-pill">
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  )
+}
+
+function ComparisonMetric({
+  label,
+  comparison,
+}: {
+  label: string
+  comparison: ReturnType<typeof compareToWorkspaceAverage> | null
+}) {
+  if (!comparison) return null
+  return (
+    <div className="comparison-metric">
+      <span>{label}</span>
+      <strong className={comparison.tone}>{comparison.label}</strong>
+      <small>Workspace average {comparison.average.toFixed(1)}</small>
     </div>
   )
 }
@@ -1364,6 +1531,7 @@ function TrendLineChart({
     { label: `${(min + range / 2).toFixed(range / 2 >= 10 ? 0 : 1)}${valueSuffix}`, position: (height - paddingBottom + paddingTop) / 2 },
     { label: `${min.toFixed(min >= 10 ? 0 : 1)}${valueSuffix}`, position: height - paddingBottom },
   ]
+  const hoveredPoint = coords.find((point) => point.key === hoveredKey) ?? null
 
   const updateHoveredPoint = (clientX: number, currentTarget: EventTarget & SVGSVGElement) => {
     const bounds = currentTarget.getBoundingClientRect()
@@ -1378,7 +1546,11 @@ function TrendLineChart({
     <div className={`trend-chart-shell tone-${tone}`}>
       <div className="trend-chart-header">
         <span>{subtitle}</span>
-        <span>{max.toFixed(max >= 10 ? 0 : 1)}{valueSuffix} max</span>
+        <span className="trend-chart-readout">
+          {hoveredPoint
+            ? `${hoveredPoint.label} · ${hoveredPoint.value.toFixed(hoveredPoint.value >= 10 ? 0 : 1)}${valueSuffix}${hoveredPoint.detail ? ` · ${hoveredPoint.detail}` : ''}`
+            : `${max.toFixed(max >= 10 ? 0 : 1)}${valueSuffix} max`}
+        </span>
       </div>
       <div className="trend-chart-layout">
         <div className="trend-y-axis" aria-hidden="true">

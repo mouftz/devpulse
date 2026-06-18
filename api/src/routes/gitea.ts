@@ -10,6 +10,7 @@ import {
   markRepoSyncSucceeded,
 } from '../lib/sync-queue.js'
 import { normalizeSyncError } from '../lib/sync-errors.js'
+import { mapWithConcurrency } from '../lib/concurrency.js'
 
 type AuthPayload = {
   sub: string
@@ -60,6 +61,8 @@ type GiteaUser = {
   login?: string
   username?: string
 }
+
+const PROVIDER_REQUEST_CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.PROVIDER_REQUEST_CONCURRENCY ?? 5)))
 
 const getBearerToken = (request: FastifyRequest) => {
   const authorization = request.headers.authorization
@@ -140,8 +143,10 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
     const reviewsByPr = new Map<number, GiteaReview[]>()
     const reviewCommentsByPr = new Map<number, GiteaComment[]>()
     const issueCommentsByPr = new Map<number, GiteaComment[]>()
-    await Promise.all(
-      pullRequests.map(async (pullRequest) => {
+    await mapWithConcurrency(
+      pullRequests,
+      PROVIDER_REQUEST_CONCURRENCY,
+      async (pullRequest) => {
         try {
           const [reviews, reviewComments, issueComments] = await Promise.all([
             paginateGitea<GiteaReview>(`${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/reviews`),
@@ -156,7 +161,7 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
           reviewCommentsByPr.set(pullRequest.number, [])
           issueCommentsByPr.set(pullRequest.number, [])
         }
-      }),
+      },
     )
 
     const synced = await prisma.$transaction(async (tx) => {

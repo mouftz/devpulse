@@ -2,10 +2,14 @@ import 'dotenv/config'
 import prisma from './db.js'
 import { syncGiteaRepo } from './routes/gitea.js'
 import { syncGitHubRepo } from './routes/repos.js'
-import { enqueueDueRepos, popSyncJob } from './lib/sync-queue.js'
+import { enqueueDueRepos, enqueueSyncJob, popSyncJob, type SyncJob } from './lib/sync-queue.js'
+import { retryAttempt, retryDelayMs, shouldRetrySyncJob } from './lib/retry-policy.js'
 
 const SYNC_INTERVAL_SECONDS = Math.max(60, Number(process.env.SYNC_INTERVAL_SECONDS ?? 86400))
 const RUN_ON_START = String(process.env.RUN_ON_START ?? 'true') === 'true'
+const SYNC_MAX_ATTEMPTS = Math.max(1, Number(process.env.SYNC_MAX_ATTEMPTS ?? 3))
+const SYNC_RETRY_BASE_MS = Math.max(100, Number(process.env.SYNC_RETRY_BASE_MS ?? 5_000))
+const SYNC_RETRY_MAX_MS = Math.max(SYNC_RETRY_BASE_MS, Number(process.env.SYNC_RETRY_MAX_MS ?? 60_000))
 
 const log = (...values: unknown[]) => {
   console.log('[worker]', ...values)
@@ -16,10 +20,7 @@ const scheduleDueRepos = async (reason: 'nightly' | 'catchup') => {
   log(`queued ${queued} repos for ${reason}`)
 }
 
-const processJob = async () => {
-  const job = await popSyncJob()
-  if (!job) return
-
+const processJob = async (job: SyncJob) => {
   const repo = await prisma.repo.findUnique({
     where: { id: job.repoId },
     select: { id: true, fullName: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true, isHidden: true },
@@ -45,6 +46,23 @@ const processJob = async () => {
   log(`synced gitea repo ${repo.fullName}`)
 }
 
+const scheduleRetry = (job: SyncJob, error: unknown) => {
+  if (!shouldRetrySyncJob(job, error, SYNC_MAX_ATTEMPTS)) {
+    log(`giving up on repo ${job.repoId} after ${retryAttempt(job) + 1} attempt(s)`)
+    return
+  }
+
+  const attempt = retryAttempt(job) + 1
+  const delayMs = retryDelayMs(attempt - 1, SYNC_RETRY_BASE_MS, SYNC_RETRY_MAX_MS)
+  log(`retrying repo ${job.repoId} in ${delayMs}ms (attempt ${attempt + 1}/${SYNC_MAX_ATTEMPTS})`)
+
+  setTimeout(() => {
+    void enqueueSyncJob({ ...job, attempt, requestedAt: new Date().toISOString() }).catch((retryError) => {
+      log(`failed to requeue repo ${job.repoId}`, retryError)
+    })
+  }, delayMs)
+}
+
 const runLoop = async () => {
   if (RUN_ON_START) {
     await scheduleDueRepos('catchup')
@@ -57,10 +75,14 @@ const runLoop = async () => {
   }, SYNC_INTERVAL_SECONDS * 1000)
 
   while (true) {
+    const job = await popSyncJob()
+    if (!job) continue
+
     try {
-      await processJob()
+      await processJob(job)
     } catch (error) {
       log('job failed', error)
+      scheduleRetry(job, error)
     }
   }
 }

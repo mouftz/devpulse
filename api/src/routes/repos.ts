@@ -11,6 +11,7 @@ import {
   markRepoSyncSucceeded,
 } from '../lib/sync-queue.js'
 import { normalizeSyncError } from '../lib/sync-errors.js'
+import { mapWithConcurrency } from '../lib/concurrency.js'
 
 type AuthPayload = {
   sub: string
@@ -73,6 +74,8 @@ type AnalyticsUser = {
   username: string
   giteaUsername: string | null
 }
+
+const PROVIDER_REQUEST_CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.PROVIDER_REQUEST_CONCURRENCY ?? 5)))
 
 export type GitHubSyncUser = {
   id: string
@@ -152,8 +155,10 @@ export const syncGitHubRepo = async (
     const reviewCommentsByPr = new Map<number, GitHubReviewComment[]>()
     const issueCommentsByPr = new Map<number, GitHubIssueComment[]>()
 
-    await Promise.all(
-      pullRequests.map(async (pullRequest) => {
+    await mapWithConcurrency(
+      pullRequests,
+      PROVIDER_REQUEST_CONCURRENCY,
+      async (pullRequest) => {
         try {
           const [reviews, reviewComments, issueComments] = await Promise.all([
             paginateGitHub<GitHubReview>(
@@ -177,7 +182,7 @@ export const syncGitHubRepo = async (
           reviewCommentsByPr.set(pullRequest.number, [])
           issueCommentsByPr.set(pullRequest.number, [])
         }
-      }),
+      },
     )
 
     const synced = await prisma.$transaction(async (tx) => {
@@ -1086,6 +1091,18 @@ export async function repoRoutes(app: FastifyInstance) {
     Params: { repoId: string }
     Body: { isHidden?: boolean }
   }>('/repos/:repoId/visibility', visibilityHandler)
+
+  app.post('/repos/visibility/restore-all', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) return
+
+    const result = await prisma.repo.updateMany({
+      where: { ownerId: user.id, isHidden: true },
+      data: { isHidden: false },
+    })
+
+    return { restored: result.count }
+  })
 
   app.get<{
     Querystring: { repoId?: string; days?: string; scope?: string }

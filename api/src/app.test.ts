@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createApp } from './app.js'
 import prisma from './db.js'
+import { setQueueTransportForTests } from './lib/sync-queue.js'
 
 const authCookie = async (app: ReturnType<typeof createApp>, userId = 'user-1') => ({
   devpulse_token: await (async () => {
@@ -128,6 +129,22 @@ test('POST /auth/unlink/gitea clears the saved Gitea username', async () => {
 
 test('GET /auth/system returns API, sync, and provider status for an authenticated session', async () => {
   const app = createApp()
+  const originalRepoFindMany = prisma.repo.findMany
+  let queryCount = 0
+
+  prisma.repo.findMany = (async () => {
+    queryCount += 1
+    if (queryCount === 1) {
+      return [{ syncStatus: 'healthy' }, { syncStatus: 'failed' }, { syncStatus: 'queued' }]
+    }
+    return [{
+      id: 'repo-2',
+      fullName: 'mouftz/failing-repo',
+      provider: 'github',
+      lastSyncError: 'GitHub temporarily unavailable',
+      lastSyncFinishedAt: new Date('2026-06-18T10:00:00.000Z'),
+    }]
+  }) as unknown as typeof prisma.repo.findMany
 
   try {
     const response = await app.inject({
@@ -143,9 +160,13 @@ test('GET /auth/system returns API, sync, and provider status for an authenticat
     assert.equal(typeof payload.sync.intervalSeconds, 'number')
     assert.equal(typeof payload.sync.runOnStart, 'boolean')
     assert.equal(payload.sync.queueDepth, 0)
+    assert.equal(payload.sync.status, 'degraded')
+    assert.deepEqual(payload.sync.repos, { total: 3, queued: 1, syncing: 0, healthy: 1, failed: 1, idle: 0 })
+    assert.equal(payload.sync.recentFailures[0].fullName, 'mouftz/failing-repo')
     assert.equal(typeof payload.providers.githubOauthConfigured, 'boolean')
     assert.equal(typeof payload.providers.giteaConfigured, 'boolean')
   } finally {
+    prisma.repo.findMany = originalRepoFindMany
     await app.close()
   }
 })
@@ -317,6 +338,35 @@ test('GET /github/repos/manage returns visible and hidden repos with counts', as
     prisma.repo.findMany = originalRepoFindMany
     prisma.commit.count = originalCommitCount
     prisma.pullRequest.count = originalPullRequestCount
+    await app.close()
+  }
+})
+
+test('POST /github/repos/visibility/restore-all restores only the authenticated users hidden repos', async () => {
+  const app = createApp()
+  const originalUserFindUnique = prisma.user.findUnique
+  const originalRepoUpdateMany = prisma.repo.updateMany
+  let receivedWhere: unknown
+
+  prisma.user.findUnique = (async () => ({ id: 'user-1' })) as unknown as typeof prisma.user.findUnique
+  prisma.repo.updateMany = (async ({ where }: { where: unknown }) => {
+    receivedWhere = where
+    return { count: 3 }
+  }) as unknown as typeof prisma.repo.updateMany
+
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/github/repos/visibility/restore-all',
+      cookies: await authCookie(app),
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(response.json(), { restored: 3 })
+    assert.deepEqual(receivedWhere, { ownerId: 'user-1', isHidden: true })
+  } finally {
+    prisma.user.findUnique = originalUserFindUnique
+    prisma.repo.updateMany = originalRepoUpdateMany
     await app.close()
   }
 })
@@ -738,6 +788,182 @@ test('GET /github/repos/:repoId/review-latency returns weekly first-review analy
     prisma.user.findUnique = originalUserFindUnique
     prisma.repo.findFirst = originalRepoFindFirst
     prisma.pullRequest.findMany = originalPullRequestFindMany
+    await app.close()
+  }
+})
+
+const installQueueTestTransport = () => {
+  const payloads: string[] = []
+  setQueueTransportForTests({
+    push: async (payload) => {
+      payloads.push(payload)
+    },
+    pop: async () => null,
+    depth: async () => payloads.length,
+  })
+  return payloads
+}
+
+test('POST /github/repos/sync-all/background queues visible GitHub repositories', async () => {
+  const app = createApp()
+  const originalUserFindUnique = prisma.user.findUnique
+  const originalRepoFindMany = prisma.repo.findMany
+  const originalRepoUpdate = prisma.repo.update
+  const payloads = installQueueTestTransport()
+
+  prisma.user.findUnique = (async () => ({ id: 'user-1' })) as unknown as typeof prisma.user.findUnique
+  prisma.repo.findMany = (async () => ([
+    { id: 'github-1', provider: 'github', providerRepoId: '101', githubRepoId: '101', ownerId: 'user-1' },
+    { id: 'github-2', provider: 'github', providerRepoId: '102', githubRepoId: '102', ownerId: 'user-1' },
+  ])) as unknown as typeof prisma.repo.findMany
+  prisma.repo.update = (async () => ({ id: 'queued' })) as unknown as typeof prisma.repo.update
+
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/github/repos/sync-all/background',
+      cookies: await authCookie(app),
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(response.json(), { queued: 2, queueDepth: 2 })
+    assert.deepEqual(payloads.map((payload) => JSON.parse(payload).provider), ['github', 'github'])
+  } finally {
+    setQueueTransportForTests(null)
+    prisma.user.findUnique = originalUserFindUnique
+    prisma.repo.findMany = originalRepoFindMany
+    prisma.repo.update = originalRepoUpdate
+    await app.close()
+  }
+})
+
+test('POST /github/repos/:repoId/sync/background queues one owned GitHub repository', async () => {
+  const app = createApp()
+  const originalUserFindUnique = prisma.user.findUnique
+  const originalRepoFindFirst = prisma.repo.findFirst
+  const originalRepoUpdate = prisma.repo.update
+  const payloads = installQueueTestTransport()
+
+  prisma.user.findUnique = (async () => ({ id: 'user-1' })) as unknown as typeof prisma.user.findUnique
+  prisma.repo.findFirst = (async () => ({
+    id: 'github-1', provider: 'github', providerRepoId: '101', githubRepoId: '101', ownerId: 'user-1',
+  })) as unknown as typeof prisma.repo.findFirst
+  prisma.repo.update = (async () => ({ id: 'queued' })) as unknown as typeof prisma.repo.update
+
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/github/repos/github-1/sync/background',
+      cookies: await authCookie(app),
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(response.json(), { queued: 1, queueDepth: 1 })
+    assert.equal(JSON.parse(payloads[0]!).repoId, 'github-1')
+  } finally {
+    setQueueTransportForTests(null)
+    prisma.user.findUnique = originalUserFindUnique
+    prisma.repo.findFirst = originalRepoFindFirst
+    prisma.repo.update = originalRepoUpdate
+    await app.close()
+  }
+})
+
+test('POST /gitea/repos/sync-all/background queues visible Gitea repositories', async () => {
+  const app = createApp()
+  const originalUserFindUnique = prisma.user.findUnique
+  const originalRepoFindMany = prisma.repo.findMany
+  const originalRepoUpdate = prisma.repo.update
+  const payloads = installQueueTestTransport()
+
+  prisma.user.findUnique = (async () => ({ id: 'user-1' })) as unknown as typeof prisma.user.findUnique
+  prisma.repo.findMany = (async () => ([
+    { id: 'gitea-1', provider: 'gitea', providerRepoId: '201', githubRepoId: 'gitea:201', ownerId: 'user-1' },
+  ])) as unknown as typeof prisma.repo.findMany
+  prisma.repo.update = (async () => ({ id: 'queued' })) as unknown as typeof prisma.repo.update
+
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/gitea/repos/sync-all/background',
+      cookies: await authCookie(app),
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(response.json(), { queued: 1, queueDepth: 1 })
+    assert.equal(JSON.parse(payloads[0]!).provider, 'gitea')
+  } finally {
+    setQueueTransportForTests(null)
+    prisma.user.findUnique = originalUserFindUnique
+    prisma.repo.findMany = originalRepoFindMany
+    prisma.repo.update = originalRepoUpdate
+    await app.close()
+  }
+})
+
+test('POST /gitea/repos/:repoId/sync/background queues one owned Gitea repository', async () => {
+  const app = createApp()
+  const originalUserFindUnique = prisma.user.findUnique
+  const originalRepoFindFirst = prisma.repo.findFirst
+  const originalRepoUpdate = prisma.repo.update
+  const payloads = installQueueTestTransport()
+
+  prisma.user.findUnique = (async () => ({ id: 'user-1' })) as unknown as typeof prisma.user.findUnique
+  prisma.repo.findFirst = (async () => ({
+    id: 'gitea-1', provider: 'gitea', providerRepoId: '201', githubRepoId: 'gitea:201', ownerId: 'user-1',
+  })) as unknown as typeof prisma.repo.findFirst
+  prisma.repo.update = (async () => ({ id: 'queued' })) as unknown as typeof prisma.repo.update
+
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/gitea/repos/gitea-1/sync/background',
+      cookies: await authCookie(app),
+    })
+
+    assert.equal(response.statusCode, 200)
+    assert.deepEqual(response.json(), { queued: 1, queueDepth: 1 })
+    assert.deepEqual(JSON.parse(payloads[0]!), {
+      repoId: 'gitea-1',
+      provider: 'gitea',
+      ownerId: 'user-1',
+      reason: 'manual',
+      requestedAt: JSON.parse(payloads[0]!).requestedAt,
+    })
+  } finally {
+    setQueueTransportForTests(null)
+    prisma.user.findUnique = originalUserFindUnique
+    prisma.repo.findFirst = originalRepoFindFirst
+    prisma.repo.update = originalRepoUpdate
+    await app.close()
+  }
+})
+
+test('background single-repo routes reject inaccessible repositories without queueing', async () => {
+  const app = createApp()
+  const originalUserFindUnique = prisma.user.findUnique
+  const originalRepoFindFirst = prisma.repo.findFirst
+  const payloads = installQueueTestTransport()
+
+  prisma.user.findUnique = (async () => ({ id: 'user-1' })) as unknown as typeof prisma.user.findUnique
+  prisma.repo.findFirst = (async () => null) as unknown as typeof prisma.repo.findFirst
+
+  try {
+    const cookies = await authCookie(app)
+    const [githubResponse, giteaResponse] = await Promise.all([
+      app.inject({ method: 'POST', url: '/github/repos/missing/sync/background', cookies }),
+      app.inject({ method: 'POST', url: '/gitea/repos/missing/sync/background', cookies }),
+    ])
+
+    assert.equal(githubResponse.statusCode, 404)
+    assert.deepEqual(githubResponse.json(), { error: 'Repo not found' })
+    assert.equal(giteaResponse.statusCode, 404)
+    assert.deepEqual(giteaResponse.json(), { error: 'Gitea repo not found' })
+    assert.equal(payloads.length, 0)
+  } finally {
+    setQueueTransportForTests(null)
+    prisma.user.findUnique = originalUserFindUnique
+    prisma.repo.findFirst = originalRepoFindFirst
     await app.close()
   }
 })

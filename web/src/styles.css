@@ -1145,6 +1145,45 @@ h2 {
   font-size: clamp(1.2rem, 2vw, 1.65rem);
 }
 
+.repo-comparison-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px;
+  margin-top: 16px;
+  padding: 15px 2px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.comparison-metric {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: baseline;
+}
+
+.comparison-metric span,
+.comparison-metric small {
+  color: rgba(246, 247, 251, 0.55);
+}
+
+.comparison-metric strong {
+  font-size: 0.94rem;
+}
+
+.comparison-metric strong.above {
+  color: #7ee0c0;
+}
+
+.comparison-metric strong.below {
+  color: #ffc978;
+}
+
+.comparison-metric small {
+  grid-column: 1 / -1;
+  font-size: 0.78rem;
+}
+
 .mini-chart-block {
   display: grid;
   grid-template-columns: minmax(150px, 0.28fr) minmax(0, 1fr);
@@ -1270,6 +1309,14 @@ h2 {
 
 .trend-chart-header span:last-child {
   color: rgba(246, 247, 251, 0.72);
+}
+
+.trend-chart-readout {
+  min-width: min(290px, 58%);
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .trend-line-chart {
@@ -1451,6 +1498,43 @@ h2 {
   gap: 10px;
 }
 
+.sync-failure-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.sync-failure-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 12px 14px;
+  background: rgba(255, 120, 120, 0.07);
+  border: 1px solid rgba(255, 120, 120, 0.16);
+  border-radius: 8px;
+}
+
+.sync-failure-row button {
+  justify-self: end;
+}
+
+.sync-failure-row strong,
+.sync-failure-row span {
+  display: block;
+}
+
+.sync-failure-row span,
+.sync-failure-row p {
+  color: rgba(246, 247, 251, 0.62);
+  font-size: 0.82rem;
+}
+
+.sync-failure-row p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .settings-row {
   display: flex;
   align-items: center;
@@ -1535,10 +1619,29 @@ h2 {
   margin-bottom: 16px;
 }
 
+.manager-primary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .manager-filter-row {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
   margin-bottom: 12px;
+}
+
+.manager-reset-button {
+  align-self: end;
+}
+
+.manager-result-count {
+  display: block;
+  margin: -4px 0 12px;
+  color: rgba(246, 247, 251, 0.5);
+  font-size: 0.78rem;
 }
 
 .manager-select {
@@ -1776,6 +1879,10 @@ h2 {
     grid-template-columns: 1fr;
   }
 
+  .repo-comparison-strip {
+    grid-template-columns: 1fr;
+  }
+
   .mini-chart-block {
     grid-template-columns: 1fr;
   }
@@ -1798,6 +1905,14 @@ h2 {
     grid-template-columns: 1fr;
   }
 
+  .sync-failure-row {
+    grid-template-columns: 1fr;
+  }
+
+  .sync-failure-row button {
+    justify-self: stretch;
+  }
+
   .trend-y-axis {
     display: none;
   }
@@ -1807,6 +1922,11 @@ h2 {
   .settings-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .manager-primary-actions {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .manager-filter-row {

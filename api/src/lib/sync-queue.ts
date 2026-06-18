@@ -10,12 +10,20 @@ export type SyncJob = {
   ownerId: string
   reason: 'manual' | 'nightly' | 'catchup'
   requestedAt: string
+  attempt?: number
 }
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379'
 const SYNC_QUEUE_KEY = 'devpulse:sync_queue'
 
 let redisClient: Redis | null = null
+type QueueTransport = {
+  push: (payload: string) => Promise<void>
+  pop: () => Promise<string | null>
+  depth: () => Promise<number>
+}
+
+let queueTransportOverride: QueueTransport | null = null
 
 const redis = () => {
   if (!redisClient) {
@@ -33,6 +41,22 @@ const redis = () => {
 export const queueKey = SYNC_QUEUE_KEY
 
 export const repoProvider = normalizeRepoProvider
+
+const queueTransport = (): QueueTransport =>
+  queueTransportOverride ?? {
+    push: async (payload: string) => {
+      await redis().lpush(SYNC_QUEUE_KEY, payload)
+    },
+    pop: async () => {
+      const result = await redis().brpop(SYNC_QUEUE_KEY, 0)
+      return result?.[1] ?? null
+    },
+    depth: async () => redis().llen(SYNC_QUEUE_KEY),
+  }
+
+export const setQueueTransportForTests = (transport: QueueTransport | null) => {
+  queueTransportOverride = transport
+}
 
 export const markRepoQueued = async (repoId: string) => {
   await prisma.repo.update({
@@ -80,7 +104,7 @@ export const markRepoSyncFailed = async (repoId: string, error: string) => {
 
 export const enqueueSyncJob = async (job: SyncJob) => {
   await markRepoQueued(job.repoId)
-  await redis().lpush(SYNC_QUEUE_KEY, JSON.stringify(job))
+  await queueTransport().push(JSON.stringify(job))
 }
 
 export const enqueueRepoSync = async (
@@ -124,21 +148,37 @@ export const enqueueDueRepos = async (reason: SyncJob['reason'] = 'nightly') => 
   return dueRepos.length
 }
 
-export const popSyncJob = async (): Promise<SyncJob | null> => {
-  const result = await redis().brpop(SYNC_QUEUE_KEY, 0)
-  const payload = result?.[1]
-  if (!payload) return null
-
+export const parseSyncJob = (payload: string): SyncJob | null => {
   try {
-    return JSON.parse(payload) as SyncJob
+    const value = JSON.parse(payload) as Partial<SyncJob>
+    const validProvider = value.provider === 'github' || value.provider === 'gitea'
+    const validReason = value.reason === 'manual' || value.reason === 'nightly' || value.reason === 'catchup'
+    const validAttempt = value.attempt === undefined || (Number.isInteger(value.attempt) && value.attempt >= 0)
+
+    if (
+      typeof value.repoId !== 'string' || !value.repoId.trim() ||
+      typeof value.ownerId !== 'string' || !value.ownerId.trim() ||
+      typeof value.requestedAt !== 'string' || Number.isNaN(Date.parse(value.requestedAt)) ||
+      !validProvider || !validReason || !validAttempt
+    ) {
+      return null
+    }
+
+    return value as SyncJob
   } catch {
     return null
   }
 }
 
+export const popSyncJob = async (): Promise<SyncJob | null> => {
+  const payload = await queueTransport().pop()
+  if (!payload) return null
+  return parseSyncJob(payload)
+}
+
 export const getQueueDepth = async () => {
   try {
-    return await redis().llen(SYNC_QUEUE_KEY)
+    return await queueTransport().depth()
   } catch {
     return 0
   }

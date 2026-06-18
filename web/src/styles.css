@@ -45,13 +45,19 @@ button {
   position: relative;
 }
 
+.auth-shell {
+  background:
+    radial-gradient(ellipse 58rem 92rem at 22% 16%, rgba(49, 122, 194, 0.34), transparent 72%),
+    radial-gradient(ellipse 48rem 88rem at 28% 82%, rgba(77, 171, 247, 0.24), transparent 74%),
+    radial-gradient(ellipse 50rem 78rem at 88% 2%, rgba(32, 201, 151, 0.38), transparent 70%),
+    radial-gradient(ellipse 44rem 34rem at 74% 0%, rgba(238, 113, 71, 0.2), transparent 66%),
+    linear-gradient(145deg, #07080d 0%, #101522 48%, #081313 100%);
+}
+
 .auth-hero {
   min-height: 100vh;
   padding-bottom: 44px;
-  background:
-    radial-gradient(ellipse 58rem 92rem at 22% 16%, rgba(49, 122, 194, 0.34), transparent 72%),
-    radial-gradient(ellipse 40rem 56rem at 28% 100%, rgba(77, 171, 247, 0.28), transparent 72%),
-    linear-gradient(180deg, rgba(7, 8, 13, 0) 0%, rgba(7, 8, 13, 0.18) 72%, rgba(7, 8, 13, 0.28) 100%);
+  background: transparent;
 }
 
 .workspace-shell {
@@ -994,9 +1000,13 @@ h2 {
   white-space: nowrap;
 }
 
-.sync-status-pill {
-  display: inline-grid;
-  place-items: center;
+.sync-status-pill,
+.repo-row .sync-status-pill,
+.manager-row .sync-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
   width: 92px;
   height: 28px;
   padding: 0 12px;
@@ -1012,11 +1022,16 @@ h2 {
   text-transform: uppercase;
 }
 
-.sync-status-pill-label {
-  display: block;
+.sync-status-pill .sync-status-pill-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
+  height: 100%;
+  margin: 0;
+  line-height: 1;
   text-align: center;
-  transform: translateY(-0.5px);
+  transform: none;
 }
 
 .sync-status-pill.idle,

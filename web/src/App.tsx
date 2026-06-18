@@ -1534,8 +1534,13 @@ function TrendLineChart({
   const hoveredPoint = coords.find((point) => point.key === hoveredKey) ?? null
 
   const updateHoveredPoint = (clientX: number, currentTarget: EventTarget & SVGSVGElement) => {
-    const bounds = currentTarget.getBoundingClientRect()
-    const relativeX = ((clientX - bounds.left) / bounds.width) * width
+    const matrix = currentTarget.getScreenCTM()
+    if (!matrix) return
+
+    const cursor = currentTarget.createSVGPoint()
+    cursor.x = clientX
+    cursor.y = 0
+    const relativeX = cursor.matrixTransform(matrix.inverse()).x
     const nextPoint = coords.reduce((closest, point) =>
       Math.abs(point.x - relativeX) < Math.abs(closest.x - relativeX) ? point : closest,
     )

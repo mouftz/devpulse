@@ -4,6 +4,7 @@ import {
   BrainCircuit,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Eye,
   GitBranch,
   Github,
@@ -12,6 +13,7 @@ import {
   LogOut,
   Search,
   Settings2,
+  Sparkles,
   RefreshCw,
   ShieldCheck,
   Trash2,
@@ -197,6 +199,15 @@ type DashboardInsights = {
   averageReviewLatencyHours: number | null
   staleRepos: number
   queueDepth: number
+  recommendations?: Array<{
+    id: string
+    severity: 'critical' | 'warning' | 'opportunity' | 'positive'
+    title: string
+    detail: string
+    actionLabel: string
+    actionKind: 'sync' | 'inspect' | 'none'
+    repoId?: string
+  }>
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
@@ -290,6 +301,7 @@ export function App() {
   const [prCycle, setPrCycle] = useState<PrCycleTrend | null>(null)
   const [reviewLatency, setReviewLatency] = useState<ReviewLatency | null>(null)
   const [prPredictions, setPrPredictions] = useState<PrPredictions | null>(null)
+  const [predictionsOpen, setPredictionsOpen] = useState(false)
   const [repoSort, setRepoSort] = useState<RepoSort>('recent')
   const [repoProviderFilter, setRepoProviderFilter] = useState<RepoProviderFilter>('all')
   const [repoSyncFilter, setRepoSyncFilter] = useState<RepoSyncFilter>('all')
@@ -389,6 +401,7 @@ export function App() {
   }, [managerRepos])
 
   useEffect(() => {
+    setPredictionsOpen(false)
     if (!selectedRepoId) {
       setRepoSummary(null)
       setRepoActivity(null)
@@ -652,6 +665,7 @@ export function App() {
     averageReviewLatencyHours: null,
     staleRepos: 0,
     queueDepth: 0,
+    recommendations: [],
   }
   const syncHealth = getSyncHealthSummary(insightSummary.queueDepth, insightSummary.staleRepos)
   const rangeLabel = rangeDays === 365 ? 'the last year' : `the last ${rangeDays} days`
@@ -807,6 +821,51 @@ export function App() {
           </div>
           <ContributionGraph days={activity?.days ?? []} />
         </section>
+
+        {(insightSummary.recommendations?.length ?? 0) > 0 ? (
+        <section className="glass-panel action-insights-panel">
+          <div className="section-title compact">
+            <div>
+              <p className="eyebrow">Recommended Actions</p>
+              <h2>What deserves attention</h2>
+            </div>
+            <Sparkles size={20} />
+          </div>
+          <div className="action-insights-list">
+            {(insightSummary.recommendations ?? []).map((recommendation) => (
+              <article className={`action-insight ${recommendation.severity}`} key={recommendation.id}>
+                <span className="action-insight-signal" aria-hidden="true" />
+                <div>
+                  <strong>{recommendation.title}</strong>
+                  <p>{recommendation.detail}</p>
+                </div>
+                {recommendation.actionKind === 'sync' && recommendation.repoId ? (
+                  <button
+                    className="secondary-button compact-button"
+                    onClick={() => void syncRepo(recommendation.repoId!)}
+                    disabled={syncingRepoId === recommendation.repoId}
+                  >
+                    {syncingRepoId === recommendation.repoId ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                    {recommendation.actionLabel}
+                  </button>
+                ) : recommendation.actionKind === 'inspect' && recommendation.repoId ? (
+                  <button
+                    className="secondary-button compact-button"
+                    onClick={() => {
+                      setSelectedRepoId(recommendation.repoId!)
+                      window.requestAnimationFrame(() => document.querySelector('.detail-panel')?.scrollIntoView({ behavior: 'smooth' }))
+                    }}
+                  >
+                    {recommendation.actionLabel}
+                  </button>
+                ) : (
+                  <span className="action-insight-label">{recommendation.actionLabel}</span>
+                )}
+              </article>
+            ))}
+          </div>
+        </section>
+        ) : null}
 
         <div className="repository-workspace">
           <section className="glass-panel repo-panel">
@@ -1010,15 +1069,26 @@ export function App() {
           ) : null}
 
           {selectedRepo ? (
-            <div className="prediction-block">
-              <div className="prediction-heading">
-                <BrainCircuit size={20} />
-                <div>
-                  <span className="subtle-label">Merge-time forecast</span>
-                  <strong>Open pull requests</strong>
-                </div>
-              </div>
-              {prPredictions?.predictions.length ? (
+            <div className={`prediction-block ${predictionsOpen ? 'expanded' : 'collapsed'}`}>
+              <button
+                className="prediction-toggle"
+                type="button"
+                aria-expanded={predictionsOpen}
+                onClick={() => setPredictionsOpen((open) => !open)}
+              >
+                <span className="prediction-heading">
+                  <BrainCircuit size={20} />
+                  <span>
+                    <span className="subtle-label">Merge-time forecast</span>
+                    <strong>Open pull requests</strong>
+                  </span>
+                </span>
+                <span className="prediction-toggle-meta">
+                  <span>{prPredictions?.predictions.length ?? 0} forecasts</span>
+                  {predictionsOpen ? <ChevronDown size={20} /> : <ChevronRight size={20} />}
+                </span>
+              </button>
+              {predictionsOpen && prPredictions?.predictions.length ? (
                 <div className="prediction-list">
                   {prPredictions.predictions.map((prediction) => (
                     <article className="prediction-row" key={prediction.pullRequest.number}>
@@ -1040,9 +1110,9 @@ export function App() {
                     </article>
                   ))}
                 </div>
-              ) : (
+              ) : predictionsOpen ? (
                 <div className="empty-state small">No forecasts yet. Sync a repository with open pull requests.</div>
-              )}
+              ) : null}
             </div>
           ) : null}
 

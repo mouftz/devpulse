@@ -647,6 +647,9 @@ test('GET /github/insights returns aggregate analytics for an authenticated user
     assert.equal(payload.averageReviewLatencyHours, 4)
     assert.equal(payload.staleRepos, 1)
     assert.equal(payload.queueDepth, 0)
+    assert.equal(payload.recommendations.length, 1)
+    assert.equal(payload.recommendations[0].actionKind, 'sync')
+    assert.equal(payload.recommendations[0].repoId, 'repo-2')
   } finally {
     prisma.user.findUnique = originalUserFindUnique
     prisma.repo.findMany = originalRepoFindMany

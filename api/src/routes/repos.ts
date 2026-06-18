@@ -72,6 +72,15 @@ type GitHubIssueComment = {
 }
 
 type AnalyticsScope = 'all' | 'mine'
+type ActionableInsight = {
+  id: string
+  severity: 'critical' | 'warning' | 'opportunity' | 'positive'
+  title: string
+  detail: string
+  actionLabel: string
+  actionKind: 'sync' | 'inspect' | 'none'
+  repoId?: string
+}
 type AnalyticsUser = {
   username: string
   giteaUsername: string | null
@@ -961,7 +970,13 @@ export async function repoRoutes(app: FastifyInstance) {
 
     const visibleRepos = await prisma.repo.findMany({
       where: { ownerId: user.id, isHidden: false },
-      select: { id: true, lastSyncedAt: true },
+      select: {
+        id: true,
+        fullName: true,
+        lastSyncedAt: true,
+        syncStatus: true,
+        lastSyncError: true,
+      },
     })
 
     const [commits, mergedPullRequests, reviewedPullRequests] = await Promise.all([
@@ -1024,6 +1039,90 @@ export async function repoRoutes(app: FastifyInstance) {
       return ageMs > 1000 * 60 * 60 * 24 * 7
     }).length
 
+    const recommendations: ActionableInsight[] = []
+    const failedRepo = visibleRepos.find((repo) => repo.syncStatus === 'failed')
+    if (failedRepo) {
+      recommendations.push({
+        id: `failed-sync-${failedRepo.id}`,
+        severity: 'critical',
+        title: `Repair ${failedRepo.fullName ?? 'repository'} sync`,
+        detail: failedRepo.lastSyncError ?? 'The latest sync failed, so its analytics may be incomplete.',
+        actionLabel: 'Retry sync',
+        actionKind: 'sync',
+        repoId: failedRepo.id,
+      })
+    }
+
+    const staleRepo = visibleRepos.find((repo) => {
+      if (repo.syncStatus === 'failed') return false
+      if (!repo.lastSyncedAt) return true
+      return end.getTime() - repo.lastSyncedAt.getTime() > 1000 * 60 * 60 * 24 * 7
+    })
+    if (staleRepo) {
+      recommendations.push({
+        id: `stale-repo-${staleRepo.id}`,
+        severity: 'warning',
+        title: `Refresh ${staleRepo.fullName ?? 'stale repository'}`,
+        detail: staleRepo.lastSyncedAt
+          ? 'Its analytics are more than seven days old.'
+          : 'This repository has not completed its first sync yet.',
+        actionLabel: 'Sync now',
+        actionKind: 'sync',
+        repoId: staleRepo.id,
+      })
+    }
+
+    if (averageReviewLatencyHours != null && averageReviewLatencyHours > 24) {
+      recommendations.push({
+        id: 'slow-first-review',
+        severity: 'warning',
+        title: 'Reduce time to first review',
+        detail: `Pull requests wait ${averageReviewLatencyHours.toFixed(1)} hours on average for their first review.`,
+        actionLabel: 'Review ownership and alerts',
+        actionKind: 'none',
+      })
+    }
+
+    if (averagePrCycleHours != null && averagePrCycleHours > 72) {
+      recommendations.push({
+        id: 'slow-pr-cycle',
+        severity: 'opportunity',
+        title: 'Break down long-running pull requests',
+        detail: `Merged pull requests take ${averagePrCycleHours.toFixed(1)} hours on average. Smaller changes may move faster.`,
+        actionLabel: 'Inspect PR trends',
+        actionKind: 'none',
+      })
+    }
+
+    const commitsByRepo = commits.reduce((counts, commit) => {
+      counts.set(commit.repoId, (counts.get(commit.repoId) ?? 0) + 1)
+      return counts
+    }, new Map<string, number>())
+    const busiestRepo = [...commitsByRepo.entries()].sort((a, b) => b[1] - a[1])[0]
+    if (busiestRepo && commits.length >= 10 && busiestRepo[1] / commits.length >= 0.7) {
+      const repo = visibleRepos.find((candidate) => candidate.id === busiestRepo[0])
+      recommendations.push({
+        id: `activity-concentration-${busiestRepo[0]}`,
+        severity: 'opportunity',
+        title: 'Activity is concentrated in one repository',
+        detail: `${repo?.fullName ?? 'One repository'} accounts for ${Math.round((busiestRepo[1] / commits.length) * 100)}% of commits in this period.`,
+        actionLabel: 'Inspect repository',
+        actionKind: 'inspect',
+        repoId: busiestRepo[0],
+      })
+    }
+
+    if (!recommendations.length) {
+      recommendations.push({
+        id: 'healthy-workspace',
+        severity: 'positive',
+        title: 'No urgent action needed',
+        detail: 'Sync health, review latency, and pull request cycle time are within the current thresholds.',
+        actionLabel: 'Keep monitoring',
+        actionKind: 'none',
+      })
+    }
+
     return {
       windowDays: dayCount,
       activeRepos,
@@ -1032,6 +1131,7 @@ export async function repoRoutes(app: FastifyInstance) {
       averageReviewLatencyHours,
       staleRepos,
       queueDepth: await getQueueDepth(),
+      recommendations: recommendations.slice(0, 3),
     }
   })
 

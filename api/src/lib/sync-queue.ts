@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis'
 import prisma from '../db.js'
-import { dueSyncCutoff, providerFromRepoId } from './sync-helpers.js'
+import { providerFromRepoId, shouldEnqueueRepo } from './sync-helpers.js'
 
 export type SyncProvider = 'github' | 'gitea'
 
@@ -102,18 +102,21 @@ export const enqueueRepos = async (
 
 export const enqueueDueRepos = async (reason: SyncJob['reason'] = 'nightly') => {
   const repos = await prisma.repo.findMany({
-    where: {
-      isHidden: false,
-      OR: [{ lastSyncedAt: null }, { lastSyncedAt: { lt: dueSyncCutoff() } }],
-      NOT: { syncStatus: { in: ['queued', 'syncing'] } },
-    },
-    select: { id: true, githubRepoId: true, ownerId: true },
+    where: { isHidden: false },
+    select: { id: true, githubRepoId: true, ownerId: true, lastSyncedAt: true, syncStatus: true },
     orderBy: [{ lastSyncedAt: 'asc' }, { createdAt: 'asc' }],
     take: 100,
   })
 
-  await enqueueRepos(repos, reason)
-  return repos.length
+  const dueRepos = repos.filter((repo) =>
+    shouldEnqueueRepo({
+      lastSyncedAt: repo.lastSyncedAt,
+      syncStatus: repo.syncStatus as 'idle' | 'queued' | 'syncing' | 'healthy' | 'failed',
+    }),
+  )
+
+  await enqueueRepos(dueRepos, reason)
+  return dueRepos.length
 }
 
 export const popSyncJob = async (): Promise<SyncJob | null> => {

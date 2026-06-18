@@ -18,7 +18,12 @@ import {
 } from 'lucide-react'
 import { AuthLanding } from './components/AuthLanding'
 import { WorkspaceSessionMenu } from './components/WorkspaceSessionMenu'
-import { getSyncHealthSummary, getSyncStatusLabel } from './lib/dashboard-utils.js'
+import {
+  getQueueNotice,
+  getSyncHealthSummary,
+  getSyncStatusLabel,
+  matchesSyncFilter,
+} from './lib/dashboard-utils.js'
 
 const API_URL = 'http://localhost:3000'
 
@@ -305,12 +310,7 @@ export function App() {
     const query = repoSearch.trim().toLowerCase()
     const repos = [...(overview?.repos ?? [])].filter((repo) => {
       const matchesProvider = repoProviderFilter === 'all' || repo.provider === repoProviderFilter
-      const matchesSync =
-        repoSyncFilter === 'all'
-          ? true
-          : repoSyncFilter === 'unsynced'
-            ? !repo.lastSyncedAt
-            : repo.syncStatus === repoSyncFilter
+      const matchesSync = matchesSyncFilter(repo, repoSyncFilter)
       const matchesSearch = !query || repo.fullName.toLowerCase().includes(query)
       return matchesProvider && matchesSync && matchesSearch
     })
@@ -341,6 +341,22 @@ export function App() {
     if (!query) return managerRepos
     return managerRepos.filter((repo) => repo.fullName.toLowerCase().includes(query) || repo.provider.includes(query))
   }, [managerQuery, managerRepos])
+
+  const managerStatusCounts = useMemo(() => {
+    return managerRepos.reduce(
+      (summary, repo) => {
+        summary[repo.syncStatus] += 1
+        return summary
+      },
+      {
+        healthy: 0,
+        queued: 0,
+        syncing: 0,
+        failed: 0,
+        idle: 0,
+      } satisfies Record<'healthy' | 'queued' | 'syncing' | 'failed' | 'idle', number>,
+    )
+  }, [managerRepos])
 
   useEffect(() => {
     if (!selectedRepoId) {
@@ -390,11 +406,7 @@ export function App() {
       const { nextInsights } = await refreshDashboard()
       const queued = githubResult.queued + giteaResult.queued
       const queueDepth = Math.max(githubResult.queueDepth, giteaResult.queueDepth, nextInsights.queueDepth)
-      setNotice(
-        queued > 0
-          ? `Queued ${queued} repositories for background sync. ${queueDepth} jobs waiting.`
-          : 'No repositories were queued.',
-      )
+      setNotice(getQueueNotice(queued, queueDepth))
     } catch (error) {
       setNotice(`Sync refresh failed: ${errorMessage(error)}`)
     } finally {
@@ -416,11 +428,7 @@ export function App() {
         await loadManagerRepos()
       }
       setSelectedRepoId(repoId)
-      setNotice(
-        result.queued > 0
-          ? `Queued ${repo?.fullName ?? 'repository'} for background sync. ${result.queueDepth} jobs waiting.`
-          : `No sync job queued for ${repo?.fullName ?? 'repository'}.`,
-      )
+      setNotice(getQueueNotice(result.queued, result.queueDepth, repo?.fullName ?? 'repository'))
     } catch (error) {
       setNotice(`Could not sync ${repo?.provider ?? 'repository'} ${repo?.fullName ?? repoId}: ${errorMessage(error)}`)
     } finally {
@@ -956,6 +964,13 @@ export function App() {
               <span className="subtle-label">{managerRepos.filter((repo) => !repo.isHidden).length} visible · {managerRepos.filter((repo) => repo.isHidden).length} hidden</span>
             </div>
 
+            <div className="manager-summary-strip">
+              <StatPill label="Healthy" value={String(managerStatusCounts.healthy)} />
+              <StatPill label="Queued" value={String(managerStatusCounts.queued)} />
+              <StatPill label="Syncing" value={String(managerStatusCounts.syncing)} />
+              <StatPill label="Failed" value={String(managerStatusCounts.failed)} />
+            </div>
+
             <label className="manager-search">
               <Search size={18} />
               <input
@@ -1244,7 +1259,11 @@ function SyncStatusPill({
   status: 'idle' | 'queued' | 'syncing' | 'healthy' | 'failed' | undefined
 }) {
   const resolvedStatus = status ?? 'healthy'
-  return <span className={`sync-status-pill ${resolvedStatus}`}>{getSyncStatusLabel(resolvedStatus)}</span>
+  return (
+    <span className={`sync-status-pill ${resolvedStatus}`}>
+      <span className="sync-status-pill-label">{getSyncStatusLabel(resolvedStatus)}</span>
+    </span>
+  )
 }
 
 function TrendLineChart({

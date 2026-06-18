@@ -953,6 +953,13 @@ h2 {
   text-transform: uppercase;
 }
 
+.sync-status-pill-label {
+  display: block;
+  width: 100%;
+  text-align: center;
+  transform: translateY(-0.5px);
+}
+
 .sync-status-pill.idle,
 .sync-status-pill.healthy {
   color: #bdf7df;
@@ -1464,6 +1471,13 @@ h2 {
   background: rgba(255, 255, 255, 0.065);
   border: 1px solid rgba(255, 255, 255, 0.11);
   border-radius: 8px;
+}
+
+.manager-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .manager-search:focus-within {

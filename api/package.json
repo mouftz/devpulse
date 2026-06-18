@@ -9,7 +9,7 @@
     "worker:dev": "tsx src/worker.ts",
     "build": "prisma generate && tsc",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test dist/**/*.test.js"
+    "test": "npm run build && node --test dist/*.test.js dist/**/*.test.js"
   },
   "keywords": [],
   "author": "",

@@ -27,7 +27,7 @@ services:
     networks:
       - devpulse_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U devpulse"]
+      test: ["CMD-SHELL", "pg_isready -U devpulse -d devpulse_db"]
       interval: 10s
       timeout: 5s
       retries: 5

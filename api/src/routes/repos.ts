@@ -80,6 +80,7 @@ type ActionableInsight = {
   actionLabel: string
   actionKind: 'sync' | 'inspect' | 'none'
   repoId?: string
+  repoFullName?: string
 }
 type AnalyticsUser = {
   username: string
@@ -994,7 +995,7 @@ export async function repoRoutes(app: FastifyInstance) {
           ...authorFilter(scope, user),
           mergedAt: { not: null, gte: start, lte: end },
         },
-        select: { openedAt: true, mergedAt: true },
+        select: { repoId: true, openedAt: true, mergedAt: true },
       }),
       prisma.pullRequest.findMany({
         where: {
@@ -1004,6 +1005,7 @@ export async function repoRoutes(app: FastifyInstance) {
           reviews: { some: { timeToReviewMins: { not: null } } },
         },
         select: {
+          repoId: true,
           reviews: {
             where: { timeToReviewMins: { not: null } },
             orderBy: { submittedAt: 'asc' },
@@ -1040,6 +1042,7 @@ export async function repoRoutes(app: FastifyInstance) {
     }).length
 
     const recommendations: ActionableInsight[] = []
+    const repoNames = new Map(visibleRepos.map((repo) => [repo.id, repo.fullName]))
     const failedRepo = visibleRepos.find((repo) => repo.syncStatus === 'failed')
     if (failedRepo) {
       recommendations.push({
@@ -1050,6 +1053,7 @@ export async function repoRoutes(app: FastifyInstance) {
         actionLabel: 'Retry sync',
         actionKind: 'sync',
         repoId: failedRepo.id,
+        repoFullName: failedRepo.fullName,
       })
     }
 
@@ -1069,28 +1073,59 @@ export async function repoRoutes(app: FastifyInstance) {
         actionLabel: 'Sync now',
         actionKind: 'sync',
         repoId: staleRepo.id,
+        repoFullName: staleRepo.fullName,
       })
     }
 
-    if (averageReviewLatencyHours != null && averageReviewLatencyHours > 24) {
+    const reviewHoursByRepo = reviewedPullRequests.reduce((groups, pullRequest) => {
+      const hours = (pullRequest.reviews[0]?.timeToReviewMins ?? 0) / 60
+      if (!pullRequest.repoId || hours <= 0) return groups
+      const current = groups.get(pullRequest.repoId) ?? { total: 0, count: 0 }
+      groups.set(pullRequest.repoId, { total: current.total + hours, count: current.count + 1 })
+      return groups
+    }, new Map<string, { total: number; count: number }>())
+    const slowestReviewRepo = [...reviewHoursByRepo.entries()]
+      .map(([repoId, values]) => ({ repoId, average: values.total / values.count }))
+      .sort((a, b) => b.average - a.average)[0]
+
+    if (slowestReviewRepo && slowestReviewRepo.average > 24) {
       recommendations.push({
-        id: 'slow-first-review',
+        id: `slow-first-review-${slowestReviewRepo.repoId}`,
         severity: 'warning',
         title: 'Reduce time to first review',
-        detail: `Pull requests wait ${averageReviewLatencyHours.toFixed(1)} hours on average for their first review.`,
-        actionLabel: 'Review ownership and alerts',
-        actionKind: 'none',
+        detail: `Pull requests wait ${slowestReviewRepo.average.toFixed(1)} hours on average for their first review.`,
+        actionLabel: 'Inspect repository',
+        actionKind: 'inspect',
+        repoId: slowestReviewRepo.repoId,
+        ...(repoNames.get(slowestReviewRepo.repoId)
+          ? { repoFullName: repoNames.get(slowestReviewRepo.repoId)! }
+          : {}),
       })
     }
 
-    if (averagePrCycleHours != null && averagePrCycleHours > 72) {
+    const cycleHoursByRepo = mergedPullRequests.reduce((groups, pullRequest) => {
+      if (!pullRequest.repoId || !pullRequest.mergedAt) return groups
+      const hours = (pullRequest.mergedAt.getTime() - pullRequest.openedAt.getTime()) / 1000 / 60 / 60
+      const current = groups.get(pullRequest.repoId) ?? { total: 0, count: 0 }
+      groups.set(pullRequest.repoId, { total: current.total + hours, count: current.count + 1 })
+      return groups
+    }, new Map<string, { total: number; count: number }>())
+    const slowestCycleRepo = [...cycleHoursByRepo.entries()]
+      .map(([repoId, values]) => ({ repoId, average: values.total / values.count }))
+      .sort((a, b) => b.average - a.average)[0]
+
+    if (slowestCycleRepo && slowestCycleRepo.average > 72) {
       recommendations.push({
-        id: 'slow-pr-cycle',
+        id: `slow-pr-cycle-${slowestCycleRepo.repoId}`,
         severity: 'opportunity',
         title: 'Break down long-running pull requests',
-        detail: `Merged pull requests take ${averagePrCycleHours.toFixed(1)} hours on average. Smaller changes may move faster.`,
-        actionLabel: 'Inspect PR trends',
-        actionKind: 'none',
+        detail: `Merged pull requests take ${slowestCycleRepo.average.toFixed(1)} hours on average. Smaller changes may move faster.`,
+        actionLabel: 'Inspect repository',
+        actionKind: 'inspect',
+        repoId: slowestCycleRepo.repoId,
+        ...(repoNames.get(slowestCycleRepo.repoId)
+          ? { repoFullName: repoNames.get(slowestCycleRepo.repoId)! }
+          : {}),
       })
     }
 
@@ -1109,6 +1144,7 @@ export async function repoRoutes(app: FastifyInstance) {
         actionLabel: 'Inspect repository',
         actionKind: 'inspect',
         repoId: busiestRepo[0],
+        ...(repo?.fullName ? { repoFullName: repo.fullName } : {}),
       })
     }
 

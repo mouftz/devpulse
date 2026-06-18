@@ -207,6 +207,7 @@ type DashboardInsights = {
     actionLabel: string
     actionKind: 'sync' | 'inspect' | 'none'
     repoId?: string
+    repoFullName?: string
   }>
 }
 
@@ -836,6 +837,9 @@ export function App() {
               <article className={`action-insight ${recommendation.severity}`} key={recommendation.id}>
                 <span className="action-insight-signal" aria-hidden="true" />
                 <div>
+                  {recommendation.repoFullName ? (
+                    <span className="action-insight-repo">{recommendation.repoFullName}</span>
+                  ) : null}
                   <strong>{recommendation.title}</strong>
                   <p>{recommendation.detail}</p>
                 </div>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   ArrowUpRight,
+  BrainCircuit,
   CheckCircle2,
   ChevronDown,
   Eye,
@@ -30,7 +31,7 @@ import {
   summarizeManagerRepos,
 } from './lib/dashboard-utils.js'
 
-const API_URL = 'http://localhost:3000'
+const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
 
 type User = {
   id: string
@@ -117,6 +118,18 @@ type PrCycleTrend = {
     week: string
     averageHours: number
     mergedPrs: number
+  }>
+}
+
+type PrPredictions = {
+  predictions: Array<{
+    pullRequest: { number: number; title: string; openedAt: string }
+    predictedHours: number
+    lowerBoundHours: number | null
+    upperBoundHours: number | null
+    modelVersion: string
+    modelKind: 'random_forest' | 'median_baseline'
+    predictedAt: string
   }>
 }
 
@@ -278,6 +291,7 @@ export function App() {
   const [repoSummary, setRepoSummary] = useState<RepoSummary | null>(null)
   const [prCycle, setPrCycle] = useState<PrCycleTrend | null>(null)
   const [reviewLatency, setReviewLatency] = useState<ReviewLatency | null>(null)
+  const [prPredictions, setPrPredictions] = useState<PrPredictions | null>(null)
   const [repoSort, setRepoSort] = useState<RepoSort>('recent')
   const [repoProviderFilter, setRepoProviderFilter] = useState<RepoProviderFilter>('all')
   const [repoSyncFilter, setRepoSyncFilter] = useState<RepoSyncFilter>('all')
@@ -334,6 +348,7 @@ export function App() {
       setRepoActivity(null)
       setPrCycle(null)
       setReviewLatency(null)
+      setPrPredictions(null)
       setSelectedRepoId(null)
       setRepoSummary(null)
       setState('error')
@@ -400,18 +415,21 @@ export function App() {
       api<ActivitySummary>(`/github/activity?repoId=${selectedRepoId}&days=${rangeDays}&scope=${analyticsScope}`),
       api<PrCycleTrend>(`/github/repos/${selectedRepoId}/pr-cycle?days=${rangeDays}&scope=${analyticsScope}`),
       api<ReviewLatency>(`/github/repos/${selectedRepoId}/review-latency?days=${rangeDays}&scope=${analyticsScope}`),
+      api<PrPredictions>(`/github/repos/${selectedRepoId}/predictions`),
     ])
-      .then(([nextSummary, nextActivity, nextPrCycle, nextReviewLatency]) => {
+      .then(([nextSummary, nextActivity, nextPrCycle, nextReviewLatency, nextPredictions]) => {
         setRepoSummary(nextSummary)
         setRepoActivity(nextActivity)
         setPrCycle(nextPrCycle)
         setReviewLatency(nextReviewLatency)
+        setPrPredictions(nextPredictions)
       })
       .catch(() => {
         setRepoSummary(null)
         setRepoActivity(null)
         setPrCycle(null)
         setReviewLatency(null)
+        setPrPredictions(null)
       })
   }, [selectedRepoId, rangeDays, analyticsScope])
 
@@ -1035,6 +1053,43 @@ export function App() {
                 </div>
               </div>
               <PrCycleChart trend={prCycle} />
+            </div>
+          ) : null}
+
+          {selectedRepo ? (
+            <div className="prediction-block">
+              <div className="prediction-heading">
+                <BrainCircuit size={20} />
+                <div>
+                  <span className="subtle-label">Merge-time forecast</span>
+                  <strong>Open pull requests</strong>
+                </div>
+              </div>
+              {prPredictions?.predictions.length ? (
+                <div className="prediction-list">
+                  {prPredictions.predictions.map((prediction) => (
+                    <article className="prediction-row" key={prediction.pullRequest.number}>
+                      <div>
+                        <span className="subtle-label">PR #{prediction.pullRequest.number}</span>
+                        <strong>{prediction.pullRequest.title}</strong>
+                      </div>
+                      <div className="prediction-value">
+                        <strong>{prediction.predictedHours.toFixed(1)}h</strong>
+                        <span>
+                          {prediction.lowerBoundHours != null && prediction.upperBoundHours != null
+                            ? `${prediction.lowerBoundHours.toFixed(1)}–${prediction.upperBoundHours.toFixed(1)}h range`
+                            : 'Estimate only'}
+                        </span>
+                      </div>
+                      <span className={`model-badge ${prediction.modelKind}`}>
+                        {prediction.modelKind === 'random_forest' ? 'ML model' : 'Baseline'}
+                      </span>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty-state small">No forecasts yet. Sync a repository with open pull requests.</div>
+              )}
             </div>
           ) : null}
 

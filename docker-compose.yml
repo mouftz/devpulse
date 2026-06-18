@@ -65,6 +65,7 @@ services:
       PROVIDER_REQUEST_CONCURRENCY: ${PROVIDER_REQUEST_CONCURRENCY:-5}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
       ML_SERVICE_URL: http://ml-service:8001
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
       PORT: 3000
       HOST: 0.0.0.0
       NODE_ENV: development
@@ -91,6 +92,7 @@ services:
       DATABASE_URL: postgresql://devpulse:devpulse_secret@postgres:5432/devpulse_db
       REDIS_URL: redis://redis:6379
       MODEL_DIR: /app/models/saved
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
     ports:
       - "8001:8001"
     depends_on:
@@ -124,6 +126,8 @@ services:
       GITEA_BASE_URL: ${GITEA_BASE_URL:-}
       GITEA_TOKEN: ${GITEA_TOKEN:-}
       PROVIDER_REQUEST_CONCURRENCY: ${PROVIDER_REQUEST_CONCURRENCY:-5}
+      ML_SERVICE_URL: http://ml-service:8001
+      ML_SERVICE_TOKEN: ${ML_SERVICE_TOKEN:-}
       NODE_ENV: development
     depends_on:
       postgres:

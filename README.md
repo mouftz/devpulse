@@ -37,6 +37,12 @@ The current version is focused on one clean loop:
 - Queue payload validation and background-sync failure coverage
 - Settings diagnostics for queue depth, worker state, and recent sync failures
 - One-click retry for failed GitHub and Gitea syncs
+- PR merge-time forecasts for open pull requests
+- Time-aware Random Forest training with a median-baseline safety fallback
+- Versioned prediction history with confidence ranges and feature snapshots
+- Automatic post-sync inference and scheduled model retraining
+- Production Docker Compose, container health checks, and GitHub Actions CI
+- AES-256-GCM encryption for newly stored GitHub provider tokens
 
 ## Stack
 
@@ -47,7 +53,7 @@ The current version is focused on one clean loop:
 | ORM | Prisma |
 | Database | PostgreSQL |
 | Queue / cache | Redis |
-| ML scaffold | FastAPI, scikit-learn |
+| ML service | FastAPI, pandas, scikit-learn |
 | Local orchestration | Docker Compose |
 | Monitoring scaffold | Prometheus, Grafana |
 
@@ -107,6 +113,8 @@ GITEA_BASE_URL=
 GITEA_TOKEN=
 
 REDIS_URL=redis://localhost:6379
+ML_SERVICE_URL=http://localhost:8001
+ML_SERVICE_TOKEN=
 SYNC_INTERVAL_SECONDS=86400
 RUN_ON_START=true
 SYNC_MAX_ATTEMPTS=3
@@ -173,6 +181,26 @@ Open:
 http://localhost:5173
 ```
 
+### 8. Start the ML service
+
+```bash
+cd ml-service
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn api.main:app --host 127.0.0.1 --port 8001
+```
+
+Train the model after syncing merged pull requests:
+
+```bash
+curl -X POST http://localhost:8001/train/pr-cycle
+```
+
+With fewer than 20 merged PRs, DevPulse intentionally retains a median
+baseline. With enough data, it promotes the Random Forest only when its MAE on
+newer PRs beats that baseline.
+
 ## GitHub OAuth Setup
 
 Create a GitHub OAuth app and use this callback URL:
@@ -223,6 +251,7 @@ npm test
 | `/github/repos/:repoId/summary` | GET | Repo-level metrics |
 | `/github/repos/:repoId/pr-cycle` | GET | Weekly PR cycle trend |
 | `/github/repos/:repoId/review-latency` | GET | Weekly review latency |
+| `/github/repos/:repoId/predictions` | GET | Latest open-PR merge forecasts |
 | `/github/overview` | GET | Dashboard totals and repo list |
 | `/github/activity` | GET | Daily commit counts |
 | `/github/insights` | GET | High-level dashboard insights |
@@ -236,7 +265,7 @@ npm test
 devpulse/
 ├── api/             # Fastify API, Prisma schema, worker, tests
 ├── web/             # React dashboard
-├── ml-service/      # ML service scaffold
+├── ml-service/      # PR cycle-time training and inference service
 ├── etl/             # older ETL scaffold
 ├── infra/           # monitoring / infra config
 ├── docker-compose.yml
@@ -256,19 +285,26 @@ Run them with:
 ```bash
 cd api && npm test
 cd web && npm test
+cd ml-service && python -m unittest discover -s tests
 ```
 
-## Future Work
+## Production
 
-The core ingest, analytics, background-sync infrastructure, and product flows
-are implemented. The remaining areas are intentionally left for a later phase:
+Use `docker-compose.prod.yml` for a single-host deployment. It runs migrations
+before starting immutable API, worker, ML, and frontend containers:
 
-- ML scoring and dashboard ML cards
-- deployment, CI/CD, and production secret management
+```bash
+cp .env.production.example .env.production
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
+```
+
+See [docs/production.md](docs/production.md) for Cloud Run, Cloud SQL,
+Memorystore, Secret Manager, and Workload Identity Federation guidance.
 
 ## Notes
 
-- The frontend expects the API at `http://localhost:3000`.
-- The API currently stores GitHub access tokens in Postgres for local
-  development. Production should encrypt them before writing to the database.
+- The frontend uses `VITE_API_URL`, defaulting to `http://localhost:3000`.
+- Set `TOKEN_ENCRYPTION_KEY` before reconnecting GitHub to encrypt newly stored
+  access tokens. Existing plaintext local tokens remain readable for migration.
+- Generate a token key with `openssl rand -base64 32`.
 - `.DS_Store` is ignored and should stay untracked.

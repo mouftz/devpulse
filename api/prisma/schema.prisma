@@ -119,10 +119,28 @@ model PullRequest {
   repo    Repo       @relation(fields: [repoId], references: [id], onDelete: Cascade)
   reviews PrReview[]
   comments PrComment[]
+  predictions PrCyclePrediction[]
 
   @@unique([repoId, githubPrNumber])
   @@index([repoId, openedAt])
   @@map("pull_requests")
+}
+
+model PrCyclePrediction {
+  id                 String   @id @default(uuid())
+  prId               String   @map("pr_id")
+  predictedHours     Float    @map("predicted_hours")
+  lowerBoundHours    Float?   @map("lower_bound_hours")
+  upperBoundHours    Float?   @map("upper_bound_hours")
+  modelVersion       String   @map("model_version")
+  modelKind          String   @map("model_kind")
+  featureSnapshot    Json     @map("feature_snapshot")
+  predictedAt        DateTime @default(now()) @map("predicted_at")
+
+  pullRequest PullRequest @relation(fields: [prId], references: [id], onDelete: Cascade)
+
+  @@index([prId, predictedAt])
+  @@map("pr_cycle_predictions")
 }
 
 // ── PR Reviews ─────────────────────────────────────────────────────────────────

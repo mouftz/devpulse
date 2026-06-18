@@ -12,6 +12,8 @@ import {
 } from '../lib/sync-queue.js'
 import { normalizeSyncError } from '../lib/sync-errors.js'
 import { mapWithConcurrency } from '../lib/concurrency.js'
+import { predictRepoCycleTimes } from '../lib/ml-client.js'
+import { decryptToken } from '../lib/token-crypto.js'
 
 type AuthPayload = {
   sub: string
@@ -320,6 +322,7 @@ export const syncGitHubRepo = async (
     })
 
     await markRepoSyncSucceeded(repo.id)
+    const prediction = await predictRepoCycleTimes(repo.id)
 
     return {
       repo: {
@@ -327,6 +330,7 @@ export const syncGitHubRepo = async (
         fullName: repo.fullName,
       },
       synced,
+      prediction,
     }
   } catch (error) {
     await markRepoSyncFailed(repo.id, normalizeSyncError(error))
@@ -360,7 +364,7 @@ export async function repoRoutes(app: FastifyInstance) {
       return null
     }
 
-    return user
+    return { ...user, accessToken: decryptToken(user.accessToken) }
   }
 
   app.get('/repos', async (request, reply) => {
@@ -830,6 +834,53 @@ export async function repoRoutes(app: FastifyInstance) {
       averageHours,
       reviewedPullRequests: firstReviews.length,
       weeks: weekly,
+    }
+  })
+
+  app.get<{ Params: { repoId: string } }>('/repos/:repoId/predictions', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) return
+
+    const repo = await prisma.repo.findFirst({
+      where: { id: request.params.repoId, ownerId: user.id, isHidden: false },
+      select: { id: true },
+    })
+    if (!repo) return reply.code(404).send({ error: 'Repo not found' })
+
+    const openPullRequests = await prisma.pullRequest.findMany({
+      where: { repoId: repo.id, state: 'open', mergedAt: null },
+      select: {
+        id: true,
+        githubPrNumber: true,
+        title: true,
+        openedAt: true,
+        predictions: {
+          orderBy: { predictedAt: 'desc' },
+          take: 1,
+          select: {
+            predictedHours: true,
+            lowerBoundHours: true,
+            upperBoundHours: true,
+            modelVersion: true,
+            modelKind: true,
+            predictedAt: true,
+          },
+        },
+      },
+      orderBy: { openedAt: 'desc' },
+    })
+
+    return {
+      predictions: openPullRequests
+        .filter((pullRequest) => pullRequest.predictions.length > 0)
+        .map((pullRequest) => ({
+          pullRequest: {
+            number: pullRequest.githubPrNumber,
+            title: pullRequest.title,
+            openedAt: pullRequest.openedAt,
+          },
+          ...pullRequest.predictions[0],
+        })),
     }
   })
 

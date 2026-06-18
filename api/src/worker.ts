@@ -4,12 +4,15 @@ import { syncGiteaRepo } from './routes/gitea.js'
 import { syncGitHubRepo } from './routes/repos.js'
 import { enqueueDueRepos, enqueueSyncJob, popSyncJob, type SyncJob } from './lib/sync-queue.js'
 import { retryAttempt, retryDelayMs, shouldRetrySyncJob } from './lib/retry-policy.js'
+import { trainPrCycleModel } from './lib/ml-client.js'
+import { decryptToken } from './lib/token-crypto.js'
 
 const SYNC_INTERVAL_SECONDS = Math.max(60, Number(process.env.SYNC_INTERVAL_SECONDS ?? 86400))
 const RUN_ON_START = String(process.env.RUN_ON_START ?? 'true') === 'true'
 const SYNC_MAX_ATTEMPTS = Math.max(1, Number(process.env.SYNC_MAX_ATTEMPTS ?? 3))
 const SYNC_RETRY_BASE_MS = Math.max(100, Number(process.env.SYNC_RETRY_BASE_MS ?? 5_000))
 const SYNC_RETRY_MAX_MS = Math.max(SYNC_RETRY_BASE_MS, Number(process.env.SYNC_RETRY_MAX_MS ?? 60_000))
+const ML_TRAIN_INTERVAL_SECONDS = Math.max(3600, Number(process.env.ML_TRAIN_INTERVAL_SECONDS ?? 86400))
 
 const log = (...values: unknown[]) => {
   console.log('[worker]', ...values)
@@ -37,7 +40,7 @@ const processJob = async (job: SyncJob) => {
     if (!user || !user.accessToken) {
       throw new Error(`GitHub token missing for repo ${repo.fullName}`)
     }
-    await syncGitHubRepo(user, { id: repo.id, fullName: repo.fullName })
+    await syncGitHubRepo({ ...user, accessToken: decryptToken(user.accessToken) }, { id: repo.id, fullName: repo.fullName })
     log(`synced github repo ${repo.fullName}`)
     return
   }
@@ -66,6 +69,7 @@ const scheduleRetry = (job: SyncJob, error: unknown) => {
 const runLoop = async () => {
   if (RUN_ON_START) {
     await scheduleDueRepos('catchup')
+    void trainPrCycleModel().then((result) => result && log(`trained ${result.model_kind} model on ${result.training_rows} PRs`))
   }
 
   setInterval(() => {
@@ -73,6 +77,10 @@ const runLoop = async () => {
       log('failed to queue nightly repos', error)
     })
   }, SYNC_INTERVAL_SECONDS * 1000)
+
+  setInterval(() => {
+    void trainPrCycleModel().then((result) => result && log(`trained ${result.model_kind} model on ${result.training_rows} PRs`))
+  }, ML_TRAIN_INTERVAL_SECONDS * 1000)
 
   while (true) {
     const job = await popSyncJob()

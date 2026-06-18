@@ -1,79 +1,119 @@
-"""
-DevPulse ML Service
-Endpoints:
-  POST /score         — run burnout + anomaly inference for a user/repo
-  POST /train         — retrain models on latest DB data
-  GET  /health        — liveness probe
-"""
+"""DevPulse model service: PR cycle-time training and inference."""
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import joblib, os, numpy as np
+from __future__ import annotations
+
+import os
+from contextlib import closing
 from pathlib import Path
-from features.extractor import extract_features
-from models.burnout import BurnoutPredictor
-from models.anomaly import AnomalyDetector
 
-app = FastAPI(title="DevPulse ML Service", version="0.1.0")
+import joblib
+import pandas as pd
+import psycopg2
+import psycopg2.extras
+from fastapi import Depends, FastAPI, Header, HTTPException
 
+from models.pr_cycle import predict, train_and_save
+
+
+app = FastAPI(title="DevPulse ML Service", version="1.0.0")
 MODEL_DIR = Path(os.getenv("MODEL_DIR", "/app/models/saved"))
-MODEL_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_PATH = MODEL_DIR / "pr_cycle.joblib"
+DATABASE_URL = os.getenv("DATABASE_URL")
+SERVICE_TOKEN = os.getenv("ML_SERVICE_TOKEN")
 
-# ── Load or initialise models at startup ──────────────────────────────────────
-burnout_model: BurnoutPredictor = None
-anomaly_model: AnomalyDetector = None
+TRAINING_QUERY = """
+SELECT pr.id, r.provider, r.full_name AS repo_name,
+       pr.author_github_id AS author_id, pr.title, pr.opened_at,
+       EXTRACT(EPOCH FROM (pr.merged_at - pr.opened_at)) / 3600.0 AS merge_duration_hours
+FROM pull_requests pr
+JOIN repos r ON r.id = pr.repo_id
+WHERE pr.merged_at IS NOT NULL AND pr.merged_at >= pr.opened_at
+ORDER BY pr.opened_at
+"""
 
-@app.on_event("startup")
-async def load_models():
-    global burnout_model, anomaly_model
-    bp_path = MODEL_DIR / "burnout.joblib"
-    ad_path  = MODEL_DIR / "anomaly.joblib"
-    burnout_model = joblib.load(bp_path) if bp_path.exists() else BurnoutPredictor()
-    anomaly_model = joblib.load(ad_path) if ad_path.exists() else AnomalyDetector()
+OPEN_PRS_QUERY = """
+SELECT pr.id, r.provider, r.full_name AS repo_name,
+       pr.author_github_id AS author_id, pr.title, pr.opened_at
+FROM pull_requests pr
+JOIN repos r ON r.id = pr.repo_id
+WHERE pr.repo_id = %s AND pr.merged_at IS NULL AND pr.state = 'open'
+ORDER BY pr.opened_at
+"""
 
-# ── Request / Response schemas ────────────────────────────────────────────────
-class ScoreRequest(BaseModel):
-    user_id:  str
-    repo_id:  str
-    days:     int = 30   # look-back window
 
-class ScoreResponse(BaseModel):
-    user_id:       str
-    repo_id:       str
-    burnout_score: float   # 0.0 – 1.0 (higher = higher risk)
-    anomaly_score: float   # Isolation Forest decision score
-    features:      dict
-    model_version: str
+def connection():
+    if not DATABASE_URL:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    return psycopg2.connect(DATABASE_URL)
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-@app.post("/score", response_model=ScoreResponse)
-async def score(req: ScoreRequest):
-    """Extract features from DB then run both models."""
-    features = await extract_features(req.user_id, req.repo_id, req.days)
-    if not features:
-        raise HTTPException(status_code=404, detail="No activity data found")
 
-    feature_vec = np.array([list(features.values())])
+def load_bundle() -> dict | None:
+    return joblib.load(MODEL_PATH) if MODEL_PATH.exists() else None
 
-    burnout = float(burnout_model.predict_proba(feature_vec)[0][1])
-    anomaly = float(anomaly_model.decision_function(feature_vec)[0])
 
-    return ScoreResponse(
-        user_id=req.user_id,
-        repo_id=req.repo_id,
-        burnout_score=round(burnout, 4),
-        anomaly_score=round(anomaly, 4),
-        features=features,
-        model_version="0.1.0",
-    )
+def authorize(x_ml_service_token: str | None = Header(default=None)):
+    if SERVICE_TOKEN and x_ml_service_token != SERVICE_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid service token")
 
-@app.post("/train")
-async def train():
-    """Retrain both models on latest data and persist to disk."""
-    from models.trainer import retrain_all
-    result = await retrain_all(MODEL_DIR)
-    return {"status": "ok", "result": result}
+
+def train_model() -> dict:
+    with closing(connection()) as conn:
+        frame = pd.read_sql_query(TRAINING_QUERY, conn)
+    result = train_and_save(frame, MODEL_PATH)
+    return result.__dict__
+
 
 @app.get("/health")
-async def health():
-    return {"status": "ok"}
+def health():
+    bundle = load_bundle()
+    return {
+        "status": "ok",
+        "model": None if bundle is None else {
+            "version": bundle["version"],
+            "kind": bundle["model_kind"],
+            "trainingRows": bundle["training_rows"],
+            "trainedAt": bundle["trained_at"],
+        },
+    }
+
+
+@app.post("/train/pr-cycle", dependencies=[Depends(authorize)])
+def train_pr_cycle():
+    return train_model()
+
+
+@app.post("/predict/repos/{repo_id}", dependencies=[Depends(authorize)])
+def predict_repo(repo_id: str):
+    bundle = load_bundle()
+    if bundle is None:
+        train_model()
+        bundle = load_bundle()
+    if bundle is None:
+        raise HTTPException(status_code=503, detail="Model could not be initialized")
+
+    with closing(connection()) as conn:
+        frame = pd.read_sql_query(OPEN_PRS_QUERY, conn, params=(repo_id,))
+        predictions = predict(bundle, frame)
+        with conn.cursor() as cursor:
+            for item in predictions:
+                cursor.execute(
+                    """
+                    INSERT INTO pr_cycle_predictions
+                        (id, pr_id, predicted_hours, lower_bound_hours, upper_bound_hours,
+                         model_version, model_kind, feature_snapshot, predicted_at)
+                    VALUES (gen_random_uuid()::text, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    """,
+                    (
+                        item["pr_id"], item["predicted_hours"], item["lower_bound_hours"],
+                        item["upper_bound_hours"], bundle["version"], bundle["model_kind"],
+                        psycopg2.extras.Json(item["feature_snapshot"]),
+                    ),
+                )
+        conn.commit()
+
+    return {
+        "repoId": repo_id,
+        "predictions": len(predictions),
+        "modelVersion": bundle["version"],
+        "modelKind": bundle["model_kind"],
+    }

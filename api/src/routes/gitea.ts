@@ -11,6 +11,7 @@ import {
 } from '../lib/sync-queue.js'
 import { normalizeSyncError } from '../lib/sync-errors.js'
 import { mapWithConcurrency } from '../lib/concurrency.js'
+import { predictRepoCycleTimes } from '../lib/ml-client.js'
 
 type AuthPayload = {
   sub: string
@@ -288,6 +289,7 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
     })
 
     await markRepoSyncSucceeded(repo.id)
+    const prediction = await predictRepoCycleTimes(repo.id)
 
     return {
       repo: {
@@ -295,6 +297,7 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
         fullName: repo.fullName,
       },
       synced,
+      prediction,
     }
   } catch (error) {
     await markRepoSyncFailed(repo.id, normalizeSyncError(error))

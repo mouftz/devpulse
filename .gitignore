@@ -1,6 +1,9 @@
 node_modules/
 .env
 .DS_Store
+ml-service/notebooks/artifacts/
+ml-service/.venv/
+ml-service/models/saved/
 dist/
 *.js.map
 __pycache__/

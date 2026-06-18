@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import got from 'got'
 import prisma from '../db.js'
+import { encryptToken } from '../lib/token-crypto.js'
 import { getQueueDepth } from '../lib/sync-queue.js'
 
 type GitHubTokenResponse = {
@@ -108,13 +109,13 @@ export async function authRoutes(app: FastifyInstance) {
         email,
         username: githubUser.login,
         avatarUrl: githubUser.avatar_url,
-        accessToken: tokenResponse.access_token,
+        accessToken: encryptToken(tokenResponse.access_token),
       },
       update: {
         email,
         username: githubUser.login,
         avatarUrl: githubUser.avatar_url,
-        accessToken: tokenResponse.access_token,
+        accessToken: encryptToken(tokenResponse.access_token),
       },
     })
 

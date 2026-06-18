@@ -308,3 +308,5 @@ Memorystore, Secret Manager, and Workload Identity Federation guidance.
   access tokens. Existing plaintext local tokens remain readable for migration.
 - Generate a token key with `openssl rand -base64 32`.
 - `.DS_Store` is ignored and should stay untracked.
+
+- This is still a WIP, so expect it to be unfinished :)

@@ -18,10 +18,15 @@ const SYNC_QUEUE_KEY = 'devpulse:sync_queue'
 let redisClient: Redis | null = null
 
 const redis = () => {
-  redisClient ??= new Redis(REDIS_URL, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false,
-  })
+  if (!redisClient) {
+    redisClient = new Redis(REDIS_URL, {
+      maxRetriesPerRequest: 1,
+      enableReadyCheck: false,
+      lazyConnect: true,
+      retryStrategy: () => null,
+    })
+    redisClient.on('error', () => {})
+  }
   return redisClient
 }
 
@@ -131,4 +136,10 @@ export const popSyncJob = async (): Promise<SyncJob | null> => {
   }
 }
 
-export const getQueueDepth = async () => redis().llen(SYNC_QUEUE_KEY)
+export const getQueueDepth = async () => {
+  try {
+    return await redis().llen(SYNC_QUEUE_KEY)
+  } catch {
+    return 0
+  }
+}

@@ -46,6 +46,8 @@ button {
 }
 
 .auth-shell {
+  min-height: 100svh;
+  overflow-y: clip;
   background:
     radial-gradient(ellipse 58rem 92rem at 22% 16%, rgba(49, 122, 194, 0.34), transparent 72%),
     radial-gradient(ellipse 48rem 88rem at 28% 82%, rgba(77, 171, 247, 0.24), transparent 74%),
@@ -55,8 +57,9 @@ button {
 }
 
 .auth-hero {
-  min-height: 100vh;
+  min-height: 100svh;
   padding-bottom: 44px;
+  overflow-y: clip;
   background: transparent;
 }
 
@@ -832,8 +835,22 @@ h2 {
 }
 
 .repository-workspace .repo-panel {
-  position: sticky;
-  top: 18px;
+  position: static;
+}
+
+.repository-workspace .repo-panel > .section-title {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.repository-workspace .repo-tools,
+.repository-workspace .repo-tools .segmented-control {
+  width: 100%;
+}
+
+.repository-workspace .repo-tools .segmented-control button {
+  flex: 1;
+  min-width: 0;
 }
 
 .repository-workspace .repo-filter-bar {
@@ -850,7 +867,8 @@ h2 {
 }
 
 .repository-workspace .repo-filter-control button {
-  min-width: 64px;
+  flex: 1;
+  min-width: 0;
 }
 
 .repository-workspace .repo-status-select {
@@ -859,9 +877,7 @@ h2 {
 }
 
 .repository-workspace .repo-table {
-  max-height: 720px;
-  overflow-y: auto;
-  padding-right: 4px;
+  overflow: visible;
 }
 
 .repository-workspace .repo-row {
@@ -1983,9 +1999,6 @@ h2 {
     position: static;
   }
 
-  .repository-workspace .repo-table {
-    max-height: 520px;
-  }
 
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2021,6 +2034,12 @@ h2 {
 }
 
 @media (max-width: 560px) {
+  .auth-shell,
+  .auth-hero {
+    min-height: auto;
+    overflow-y: visible;
+  }
+
   .hero {
     min-height: auto;
   }

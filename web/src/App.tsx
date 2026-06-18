@@ -200,7 +200,7 @@ type DashboardInsights = {
 }
 
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
-type RepoSort = 'recent' | 'commits' | 'unsynced'
+type RepoSort = 'recent' | 'commits'
 type RangeDays = 30 | 90 | 365
 type AnalyticsScope = 'mine' | 'all'
 type RepoProviderFilter = 'all' | 'github' | 'gitea'
@@ -367,13 +367,6 @@ export function App() {
     })
     if (repoSort === 'commits') {
       return repos.sort((a, b) => b.commits - a.commits)
-    }
-    if (repoSort === 'unsynced') {
-      return repos.sort((a, b) => {
-        if (!a.lastSyncedAt && b.lastSyncedAt) return -1
-        if (a.lastSyncedAt && !b.lastSyncedAt) return 1
-        return a.fullName.localeCompare(b.fullName)
-      })
     }
     return repos.sort((a, b) => {
       if (!a.lastSyncedAt && !b.lastSyncedAt) return a.fullName.localeCompare(b.fullName)
@@ -736,10 +729,12 @@ export function App() {
                 {syncing ? <Loader2 className="spin" size={18} /> : <RefreshCw size={18} />}
                 Sync All Repos
               </button>
-              <button className="secondary-button" onClick={() => void api('/gitea/repos').then(load)}>
-                <GitBranch size={18} />
-                Add Gitea
-              </button>
+              {!user?.giteaConnected ? (
+                <button className="secondary-button" onClick={() => void api('/gitea/repos').then(load)}>
+                  <GitBranch size={18} />
+                  Add Gitea
+                </button>
+              ) : null}
               <button className="secondary-button" onClick={openManager}>
                 <Settings2 size={18} />
                 Manage Repos
@@ -827,9 +822,6 @@ export function App() {
                   </button>
                   <button className={repoSort === 'commits' ? 'active' : ''} onClick={() => setRepoSort('commits')}>
                     Commits
-                  </button>
-                  <button className={repoSort === 'unsynced' ? 'active' : ''} onClick={() => setRepoSort('unsynced')}>
-                    Unsynced
                   </button>
                 </div>
                 <button className="icon-button" onClick={syncAll} disabled={!user || syncing} title="Sync all repos">

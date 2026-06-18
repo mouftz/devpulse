@@ -5,6 +5,7 @@ ml-service/notebooks/artifacts/
 ml-service/.venv/
 ml-service/models/saved/
 dist/
+.vercel/
 *.js.map
 __pycache__/
 *.pyc

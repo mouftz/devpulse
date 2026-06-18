@@ -1,9 +1,11 @@
 # DevPulse
 
-DevPulse is a developer analytics workspace for GitHub and Gitea repositories.
-It connects to your repos, syncs commits and pull requests into Postgres, and
-turns that raw activity into a dashboard with commit rhythm, repo-level metrics,
-PR cycle trends, review latency, sync health, and repository management tools.
+DevPulse is a full-stack engineering analytics workspace for GitHub and Gitea.
+It ingests repository activity into PostgreSQL, processes sync work through a
+Redis-backed worker, and turns commits, pull requests, reviews, and sync health
+into repository-level trends and recommended actions. A separate FastAPI ML
+service estimates merge time for open pull requests and records versioned
+predictions with confidence ranges.
 
 The current version is focused on one clean loop:
 
@@ -11,7 +13,14 @@ The current version is focused on one clean loop:
 2. Optionally layer in Gitea from the dashboard.
 3. Discover repositories.
 4. Sync them in the background through Redis.
-5. Explore repo and contributor activity in the UI.
+5. Explore trends, forecasts, and recommended actions in the dashboard.
+
+## Why DevPulse
+
+Repository hosts expose activity, but they do not always explain where a team
+should focus next. DevPulse combines GitHub and self-hosted Gitea data in one
+workspace, supports personal and whole-repository scopes, and connects each
+recommendation to the repository and evidence that produced it.
 
 ## What Works Today
 
@@ -25,6 +34,7 @@ The current version is focused on one clean loop:
 - Repo-manager search, status/visibility filters, result counts, and quick reset
 - Dashboard totals for repos, commits, pull requests, and active repos
 - Contribution heatmap with date range and `Mine` / `All` scope
+- `30d`, `90d`, `1y`, and true all-time analytics windows
 - Repo-level detail view with:
   - commit trend
   - PR cycle trend
@@ -32,13 +42,16 @@ The current version is focused on one clean loop:
   - sync status and last sync error details
   - commit and pull-request comparisons against workspace averages
   - stable hover readouts with weekly PR/review sample counts
+- Evidence-backed recommended actions with repository links and impact levels
+- Seven-day snooze, dismiss/restore controls, and browser-persisted outcome baselines
+- Improvement/regression tracking against the first observed recommendation metric
 - Provider-aware repo handling for GitHub and Gitea
 - API smoke tests and helper tests
 - Queue payload validation and background-sync failure coverage
 - Settings diagnostics for queue depth, worker state, and recent sync failures
 - One-click retry for failed GitHub and Gitea syncs
 - PR merge-time forecasts for open pull requests
-- Time-aware Random Forest training with a median-baseline safety fallback
+- Time-ordered Random Forest evaluation with a median-baseline safety fallback
 - Versioned prediction history with confidence ranges and feature snapshots
 - Automatic post-sync inference and scheduled model retraining
 - Production Docker Compose, container health checks, and GitHub Actions CI
@@ -65,19 +78,49 @@ GitHub OAuth / Gitea token
            v
       Fastify API
            |
-   -------------------
-   |        |        |
-   v        v        v
-Postgres   Redis   Frontend
-           |
-           v
-      Sync worker
+   ---------------------------
+   |          |              |
+   v          v              v
+PostgreSQL   Redis      React dashboard
+              |
+              v
+        Background worker
+              |
+              v
+       FastAPI ML service
 ```
 
 The API owns auth, provider sync, database writes, analytics responses, and
 repo visibility state. The worker consumes Redis jobs and performs background
-syncs. The frontend reads everything from the API and uses the session cookie
-set after OAuth.
+syncs with bounded exponential retry, schedules stale repositories, and starts
+model retraining. The ML service trains and serves PR-cycle predictions. The
+frontend reads the APIs using the HTTP-only session cookie created after OAuth.
+
+## Analytics and Recommendations
+
+The dashboard currently calculates:
+
+- Daily commit history and contribution intensity
+- Repository activity compared with workspace averages
+- Weekly PR cycle-time direction, average, and median
+- Time from pull-request creation to first review
+- Repository sync freshness and failure state
+- Open-PR merge-time forecasts and confidence ranges
+
+Recommended actions are deterministic and evidence-backed. They identify stale
+or failed syncs, slow first reviews, long PR cycles, and concentrated activity.
+Each action includes an impact level, the source repository, supporting evidence,
+and a direct sync or inspect command. Dismissed and snoozed actions are stored in
+the browser, along with the first observed metric used to show later movement.
+
+## ML Guardrails
+
+The PR-cycle model uses repository, provider, author, title length, weekday, and
+opening-hour features. Training is chronological: the oldest 80% of merged PRs
+form the training set and the newest 20% form the evaluation set. DevPulse uses
+a 300-tree Random Forest only when it beats a median predictor on mean absolute
+error; otherwise it retains the baseline. Fewer than 20 merged PRs also keeps
+the baseline, avoiding a misleading model trained on too little data.
 
 ## Local Setup
 
@@ -191,15 +234,14 @@ pip install -r requirements.txt
 uvicorn api.main:app --host 127.0.0.1 --port 8001
 ```
 
-Train the model after syncing merged pull requests:
+Train the model manually after syncing merged pull requests:
 
 ```bash
 curl -X POST http://localhost:8001/train/pr-cycle
 ```
 
-With fewer than 20 merged PRs, DevPulse intentionally retains a median
-baseline. With enough data, it promotes the Random Forest only when its MAE on
-newer PRs beats that baseline.
+The background worker also retrains on startup and on the configured training
+interval.
 
 ## GitHub OAuth Setup
 
@@ -276,9 +318,9 @@ devpulse/
 
 Current test coverage includes:
 
-- API helper tests
-- API app / route smoke tests
-- frontend dashboard utility tests
+- 45 API route, queue, retry, provider, sync, and encryption tests
+- 7 frontend filtering, comparison, queue-copy, and sync-health tests
+- Python tests for PR-cycle model training and prediction behavior
 
 Run them with:
 
@@ -309,4 +351,9 @@ Memorystore, Secret Manager, and Workload Identity Federation guidance.
 - Generate a token key with `openssl rand -base64 32`.
 - `.DS_Store` is ignored and should stay untracked.
 
-- This is still a WIP, so expect it to be unfinished and everything is subject to change :)
+## Current Scope
+
+DevPulse is an active portfolio project. Local development, Docker orchestration,
+background ingestion, analytics, recommendation workflows, and ML inference are
+implemented. Cloud deployment is intentionally paused; the production Compose
+file and deployment guide remain as a starting point for future hosting work.

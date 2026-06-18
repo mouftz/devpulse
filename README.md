@@ -309,4 +309,4 @@ Memorystore, Secret Manager, and Workload Identity Federation guidance.
 - Generate a token key with `openssl rand -base64 32`.
 - `.DS_Store` is ignored and should stay untracked.
 
-- This is still a WIP, so expect it to be unfinished :)
+- This is still a WIP, so expect it to be unfinished and everything is subject to change :)

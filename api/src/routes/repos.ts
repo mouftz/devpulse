@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import got from 'got'
 import prisma from '../db.js'
+import { legacyRepoKey } from '../lib/provider-helpers.js'
 import {
   enqueueRepos,
   enqueueRepoSync,
@@ -9,6 +10,7 @@ import {
   markRepoSyncStarted,
   markRepoSyncSucceeded,
 } from '../lib/sync-queue.js'
+import { normalizeSyncError } from '../lib/sync-errors.js'
 
 type AuthPayload = {
   sub: string
@@ -322,7 +324,7 @@ export const syncGitHubRepo = async (
       synced,
     }
   } catch (error) {
-    await markRepoSyncFailed(repo.id, error instanceof Error ? error.message : 'Unknown sync error')
+    await markRepoSyncFailed(repo.id, normalizeSyncError(error))
     throw error
   }
 }
@@ -377,15 +379,25 @@ export async function repoRoutes(app: FastifyInstance) {
     const repos = await prisma.$transaction(
       githubRepos.map((repo) =>
         prisma.repo.upsert({
-          where: { githubRepoId: String(repo.id) },
+          where: {
+            provider_providerRepoId: {
+              provider: 'github',
+              providerRepoId: String(repo.id),
+            },
+          },
           create: {
-            githubRepoId: String(repo.id),
+            githubRepoId: legacyRepoKey('github', String(repo.id)),
+            provider: 'github',
+            providerRepoId: String(repo.id),
             ownerId: user.id,
             fullName: repo.full_name,
             defaultBranch: repo.default_branch ?? 'main',
             isPrivate: repo.private,
           },
           update: {
+            githubRepoId: legacyRepoKey('github', String(repo.id)),
+            provider: 'github',
+            providerRepoId: String(repo.id),
             fullName: repo.full_name,
             defaultBranch: repo.default_branch ?? 'main',
             isPrivate: repo.private,
@@ -399,6 +411,8 @@ export async function repoRoutes(app: FastifyInstance) {
       repos: repos.map((repo) => ({
         id: repo.id,
         githubRepoId: repo.githubRepoId,
+        provider: repo.provider,
+        providerRepoId: repo.providerRepoId,
         fullName: repo.fullName,
         defaultBranch: repo.defaultBranch,
         isPrivate: repo.isPrivate,
@@ -417,7 +431,7 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         ownerId: user.id,
         isHidden: false,
-        githubRepoId: { not: { startsWith: 'gitea:' } },
+        provider: 'github',
       },
       select: { id: true, fullName: true },
       orderBy: { fullName: 'asc' },
@@ -435,7 +449,7 @@ export async function repoRoutes(app: FastifyInstance) {
             id: repo.id,
             fullName: repo.fullName,
           },
-          error: error instanceof Error ? error.message : 'Unknown sync error',
+          error: normalizeSyncError(error),
         })
       }
     }
@@ -497,7 +511,7 @@ export async function repoRoutes(app: FastifyInstance) {
     })
 
     if (!repo) {
-      return reply.code(404).send({ error: 'Repo not found. Run GET /github/repos first.' })
+      return reply.code(404).send({ error: 'Repo not found. Refresh repositories first.' })
     }
 
     return syncGitHubRepo(user, repo)
@@ -513,9 +527,9 @@ export async function repoRoutes(app: FastifyInstance) {
       where: {
         ownerId: user.id,
         isHidden: false,
-        githubRepoId: { not: { startsWith: 'gitea:' } },
+        provider: 'github',
       },
-      select: { id: true, githubRepoId: true, ownerId: true },
+      select: { id: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true },
       orderBy: { fullName: 'asc' },
     })
 
@@ -534,9 +548,9 @@ export async function repoRoutes(app: FastifyInstance) {
         id: request.params.repoId,
         ownerId: user.id,
         isHidden: false,
-        githubRepoId: { not: { startsWith: 'gitea:' } },
+        provider: 'github',
       },
-      select: { id: true, githubRepoId: true, ownerId: true },
+      select: { id: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true },
     })
 
     if (!repo) {
@@ -589,11 +603,14 @@ export async function repoRoutes(app: FastifyInstance) {
       },
       select: {
         id: true,
+        provider: true,
+        providerRepoId: true,
         githubRepoId: true,
         fullName: true,
         lastSyncedAt: true,
         syncStatus: true,
         lastSyncError: true,
+        lastSyncStartedAt: true,
         lastSyncFinishedAt: true,
       },
     })
@@ -822,11 +839,14 @@ export async function repoRoutes(app: FastifyInstance) {
       where: { ownerId: user.id, isHidden: false },
       select: {
         id: true,
+        provider: true,
+        providerRepoId: true,
         githubRepoId: true,
         fullName: true,
         lastSyncedAt: true,
         syncStatus: true,
         lastSyncError: true,
+        lastSyncStartedAt: true,
         lastSyncFinishedAt: true,
       },
       orderBy: { lastSyncedAt: 'desc' },
@@ -858,11 +878,12 @@ export async function repoRoutes(app: FastifyInstance) {
       totals,
       repos: reposWithCounts.map((repo) => ({
         id: repo.id,
-        provider: repo.githubRepoId.startsWith('gitea:') ? 'gitea' : 'github',
+        provider: repo.provider as 'github' | 'gitea',
         fullName: repo.fullName,
         lastSyncedAt: repo.lastSyncedAt,
         syncStatus: repo.syncStatus,
         lastSyncError: repo.lastSyncError,
+        lastSyncStartedAt: repo.lastSyncStartedAt,
         lastSyncFinishedAt: repo.lastSyncFinishedAt,
         commits: repo.commits,
         pullRequests: repo.pullRequests,
@@ -969,12 +990,15 @@ export async function repoRoutes(app: FastifyInstance) {
       where: { ownerId: user.id },
       select: {
         id: true,
+        provider: true,
+        providerRepoId: true,
         githubRepoId: true,
         fullName: true,
         isHidden: true,
         lastSyncedAt: true,
         syncStatus: true,
         lastSyncError: true,
+        lastSyncStartedAt: true,
       },
       orderBy: [{ isHidden: 'asc' }, { fullName: 'asc' }],
     })
@@ -993,12 +1017,13 @@ export async function repoRoutes(app: FastifyInstance) {
     return {
       repos: reposWithCounts.map((repo) => ({
         id: repo.id,
-        provider: repo.githubRepoId.startsWith('gitea:') ? 'gitea' : 'github',
+        provider: repo.provider as 'github' | 'gitea',
         fullName: repo.fullName,
         isHidden: repo.isHidden,
         lastSyncedAt: repo.lastSyncedAt,
         syncStatus: repo.syncStatus,
         lastSyncError: repo.lastSyncError,
+        lastSyncStartedAt: repo.lastSyncStartedAt,
         commits: repo.commits,
         pullRequests: repo.pullRequests,
       })),

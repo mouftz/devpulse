@@ -61,6 +61,8 @@ model TeamMember {
 model Repo {
   id            String    @id @default(uuid())
   githubRepoId  String    @unique @map("github_repo_id")
+  provider      String    @default("github")
+  providerRepoId String?  @map("provider_repo_id")
   ownerId       String    @map("owner_id")
   fullName      String    @map("full_name")       // "org/repo-name"
   defaultBranch String    @default("main") @map("default_branch")
@@ -78,6 +80,8 @@ model Repo {
   pullRequests PullRequest[]
   mlScores     MlScore[]
 
+  @@unique([ownerId, provider, fullName])
+  @@unique([provider, providerRepoId])
   @@map("repos")
 }
 

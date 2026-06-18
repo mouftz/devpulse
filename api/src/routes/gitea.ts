@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import got from 'got'
 import prisma from '../db.js'
+import { legacyRepoKey } from '../lib/provider-helpers.js'
 import {
   enqueueRepos,
   getQueueDepth,
@@ -8,6 +9,7 @@ import {
   markRepoSyncStarted,
   markRepoSyncSucceeded,
 } from '../lib/sync-queue.js'
+import { normalizeSyncError } from '../lib/sync-errors.js'
 
 type AuthPayload = {
   sub: string
@@ -88,7 +90,7 @@ const giteaHeaders = () => {
   }
 }
 
-const providerRepoId = (id: number) => `gitea:${id}`
+const providerRepoId = (id: number) => String(id)
 const providerCommitSha = (repoId: string, sha: string) => `gitea:${repoId}:${sha}`
 const giteaIdentity = (user?: { login?: string; username?: string } | null) => user?.login ?? user?.username ?? null
 
@@ -103,17 +105,16 @@ const paginateGitea = async <T>(path: string, searchParams: Record<string, strin
   const results: T[] = []
   const limit = Number(searchParams.limit ?? '100')
 
-  for (let page = 1; page <= 20; page += 1) {
-    const items = await got
-      .get(path, {
-        searchParams: {
-          limit: String(limit),
-          page: String(page),
-          ...searchParams,
-        },
-        headers: giteaHeaders(),
-      })
-      .json<T[]>()
+  for (let page = 1; ; page += 1) {
+    const response = await got.get(path, {
+      searchParams: {
+        limit: String(limit),
+        page: String(page),
+        ...searchParams,
+      },
+      headers: giteaHeaders(),
+    })
+    const items = JSON.parse(String(response.body)) as T[]
 
     results.push(...items)
     if (items.length < limit) break
@@ -291,7 +292,7 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
       synced,
     }
   } catch (error) {
-    await markRepoSyncFailed(repo.id, error instanceof Error ? error.message : 'Unknown sync error')
+    await markRepoSyncFailed(repo.id, normalizeSyncError(error))
     throw error
   }
 }
@@ -345,25 +346,30 @@ export async function giteaRoutes(app: FastifyInstance) {
       })
     }
 
-    const repos = await got
-      .get(`${giteaApiUrl()}/user/repos`, {
-        searchParams: { limit: '100' },
-        headers: giteaHeaders(),
-      })
-      .json<GiteaRepo[]>()
+    const repos = await paginateGitea<GiteaRepo>(`${giteaApiUrl()}/user/repos`)
 
     const savedRepos = await prisma.$transaction(
       repos.map((repo) =>
         prisma.repo.upsert({
-          where: { githubRepoId: providerRepoId(repo.id) },
+          where: {
+            provider_providerRepoId: {
+              provider: 'gitea',
+              providerRepoId: providerRepoId(repo.id),
+            },
+          },
           create: {
-            githubRepoId: providerRepoId(repo.id),
+            githubRepoId: legacyRepoKey('gitea', providerRepoId(repo.id)),
+            provider: 'gitea',
+            providerRepoId: providerRepoId(repo.id),
             ownerId: user.id,
             fullName: repo.full_name,
             defaultBranch: repo.default_branch ?? 'main',
             isPrivate: repo.private,
           },
           update: {
+            githubRepoId: legacyRepoKey('gitea', providerRepoId(repo.id)),
+            provider: 'gitea',
+            providerRepoId: providerRepoId(repo.id),
             fullName: repo.full_name,
             defaultBranch: repo.default_branch ?? 'main',
             isPrivate: repo.private,
@@ -394,7 +400,7 @@ export async function giteaRoutes(app: FastifyInstance) {
     const repos = await prisma.repo.findMany({
       where: {
         ownerId: user.id,
-        githubRepoId: { startsWith: 'gitea:' },
+        provider: 'gitea',
         isHidden: false,
       },
       select: { id: true, fullName: true },
@@ -410,7 +416,7 @@ export async function giteaRoutes(app: FastifyInstance) {
         results.push({
           status: 'failed',
           repo,
-          error: error instanceof Error ? error.message : 'Unknown sync error',
+          error: normalizeSyncError(error),
         })
       }
     }
@@ -436,7 +442,7 @@ export async function giteaRoutes(app: FastifyInstance) {
       where: {
         id: request.params.repoId,
         ownerId: user.id,
-        githubRepoId: { startsWith: 'gitea:' },
+        provider: 'gitea',
         isHidden: false,
       },
       select: { id: true, fullName: true },
@@ -458,10 +464,10 @@ export async function giteaRoutes(app: FastifyInstance) {
     const repos = await prisma.repo.findMany({
       where: {
         ownerId: user.id,
-        githubRepoId: { startsWith: 'gitea:' },
+        provider: 'gitea',
         isHidden: false,
       },
-      select: { id: true, githubRepoId: true, ownerId: true },
+      select: { id: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true },
       orderBy: { fullName: 'asc' },
     })
 
@@ -479,10 +485,10 @@ export async function giteaRoutes(app: FastifyInstance) {
       where: {
         id: request.params.repoId,
         ownerId: user.id,
-        githubRepoId: { startsWith: 'gitea:' },
+        provider: 'gitea',
         isHidden: false,
       },
-      select: { id: true, githubRepoId: true, ownerId: true },
+      select: { id: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true },
     })
 
     if (!repo) {
@@ -503,7 +509,7 @@ export async function giteaRoutes(app: FastifyInstance) {
       where: {
         id: request.params.repoId,
         ownerId: user.id,
-        githubRepoId: { startsWith: 'gitea:' },
+        provider: 'gitea',
       },
       select: { id: true, fullName: true },
     })

@@ -1,10 +1,17 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { dueSyncCutoff, providerFromRepoId, shouldEnqueueRepo } from './sync-helpers.js'
+import { dueSyncCutoff, normalizeRepoProvider, providerFromRepoId, shouldEnqueueRepo } from './sync-helpers.js'
 
 test('providerFromRepoId detects gitea and github ids', () => {
   assert.equal(providerFromRepoId('gitea:123'), 'gitea')
   assert.equal(providerFromRepoId('145159681'), 'github')
+})
+
+test('normalizeRepoProvider prefers explicit provider and falls back to legacy ids', () => {
+  assert.equal(normalizeRepoProvider('gitea', '145159681'), 'gitea')
+  assert.equal(normalizeRepoProvider('github', 'gitea:123'), 'github')
+  assert.equal(normalizeRepoProvider(undefined, 'gitea:123'), 'gitea')
+  assert.equal(normalizeRepoProvider(null, '145159681'), 'github')
 })
 
 test('dueSyncCutoff subtracts the expected number of hours', () => {

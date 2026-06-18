@@ -1,6 +1,6 @@
 import { Redis } from 'ioredis'
 import prisma from '../db.js'
-import { providerFromRepoId, shouldEnqueueRepo } from './sync-helpers.js'
+import { normalizeRepoProvider, shouldEnqueueRepo } from './sync-helpers.js'
 
 export type SyncProvider = 'github' | 'gitea'
 
@@ -27,7 +27,7 @@ const redis = () => {
 
 export const queueKey = SYNC_QUEUE_KEY
 
-export const repoProvider = providerFromRepoId
+export const repoProvider = normalizeRepoProvider
 
 export const markRepoQueued = async (repoId: string) => {
   await prisma.repo.update({
@@ -79,12 +79,12 @@ export const enqueueSyncJob = async (job: SyncJob) => {
 }
 
 export const enqueueRepoSync = async (
-  repo: { id: string; githubRepoId: string; ownerId: string },
+  repo: { id: string; provider?: string | null; providerRepoId?: string | null; githubRepoId?: string | null; ownerId: string },
   reason: SyncJob['reason'],
 ) => {
   await enqueueSyncJob({
     repoId: repo.id,
-    provider: repoProvider(repo.githubRepoId),
+    provider: repoProvider(repo.provider, repo.githubRepoId, repo.providerRepoId),
     ownerId: repo.ownerId,
     reason,
     requestedAt: new Date().toISOString(),
@@ -92,7 +92,7 @@ export const enqueueRepoSync = async (
 }
 
 export const enqueueRepos = async (
-  repos: Array<{ id: string; githubRepoId: string; ownerId: string }>,
+  repos: Array<{ id: string; provider?: string | null; providerRepoId?: string | null; githubRepoId?: string | null; ownerId: string }>,
   reason: SyncJob['reason'],
 ) => {
   for (const repo of repos) {
@@ -103,7 +103,7 @@ export const enqueueRepos = async (
 export const enqueueDueRepos = async (reason: SyncJob['reason'] = 'nightly') => {
   const repos = await prisma.repo.findMany({
     where: { isHidden: false },
-    select: { id: true, githubRepoId: true, ownerId: true, lastSyncedAt: true, syncStatus: true },
+    select: { id: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true, lastSyncedAt: true, syncStatus: true },
     orderBy: [{ lastSyncedAt: 'asc' }, { createdAt: 'asc' }],
     take: 100,
   })

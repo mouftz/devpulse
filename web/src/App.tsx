@@ -3,6 +3,7 @@ import {
   Activity,
   ArrowUpRight,
   CheckCircle2,
+  ChevronDown,
   Flame,
   GitBranch,
   Github,
@@ -50,6 +51,7 @@ type Overview = {
     provider: 'github' | 'gitea'
     fullName: string
     lastSyncedAt: string | null
+    lastSyncStartedAt: string | null
     lastSyncFinishedAt: string | null
     syncStatus: 'idle' | 'queued' | 'syncing' | 'healthy' | 'failed'
     lastSyncError: string | null
@@ -89,6 +91,10 @@ type RepoSummary = {
     id: string
     fullName: string
     lastSyncedAt: string | null
+    lastSyncStartedAt?: string | null
+    lastSyncFinishedAt?: string | null
+    syncStatus?: 'idle' | 'queued' | 'syncing' | 'healthy' | 'failed'
+    lastSyncError?: string | null
   }
   metrics: {
     commits: number
@@ -167,6 +173,8 @@ type RangeDays = 30 | 90 | 365
 type AnalyticsScope = 'mine' | 'all'
 type RepoProviderFilter = 'all' | 'github' | 'gitea'
 type RepoSyncFilter = 'all' | 'healthy' | 'queued' | 'syncing' | 'failed' | 'unsynced'
+type NoticeTone = 'info' | 'success' | 'error'
+type NoticeState = { message: string; tone: NoticeTone } | null
 
 const errorMessage = (error: unknown) => {
   if (!(error instanceof Error)) return 'Something went wrong.'
@@ -218,15 +226,22 @@ const formatSyncDetail = (
   fallbackLastSyncedAt?: string | null,
 ) => {
   if (!repo) return 'No sync history yet.'
-  if (repo.syncStatus === 'failed') return repo.lastSyncError ?? 'Last sync attempt failed.'
+  if (repo.syncStatus === 'failed') {
+    if (repo.lastSyncFinishedAt) return `Failed ${formatDate(repo.lastSyncFinishedAt)}. ${repo.lastSyncError ?? ''}`.trim()
+    return repo.lastSyncError ?? 'Last sync attempt failed.'
+  }
   if (repo.syncStatus === 'queued') return 'Queued for background sync.'
-  if (repo.syncStatus === 'syncing') return 'Background sync is running now.'
+  if (repo.syncStatus === 'syncing') {
+    return repo.lastSyncStartedAt ? `Background sync started ${formatDate(repo.lastSyncStartedAt)}.` : 'Background sync is running now.'
+  }
 
   const finishedAt = repo.lastSyncFinishedAt ?? fallbackLastSyncedAt ?? repo.lastSyncedAt
   return finishedAt ? `Finished ${formatDate(finishedAt)}.` : 'No sync history yet.'
 }
 
 const formatSyncTimestamp = (repo: Overview['repos'][number]) => {
+  if (repo.syncStatus === 'syncing' && repo.lastSyncStartedAt) return `Started ${formatDate(repo.lastSyncStartedAt)}`
+  if (repo.syncStatus === 'failed' && repo.lastSyncFinishedAt) return `Failed ${formatDate(repo.lastSyncFinishedAt)}`
   if (repo.lastSyncFinishedAt) return `Finished ${formatDate(repo.lastSyncFinishedAt)}`
   if (repo.lastSyncedAt) return `Last synced ${formatDate(repo.lastSyncedAt)}`
   return 'No completed sync yet'
@@ -256,11 +271,14 @@ export function App() {
   const [managerRepos, setManagerRepos] = useState<ManagerRepo[]>([])
   const [managerLoading, setManagerLoading] = useState(false)
   const [managerQuery, setManagerQuery] = useState('')
+  const [managerSyncFilter, setManagerSyncFilter] = useState<'all' | 'healthy' | 'queued' | 'syncing' | 'failed'>(
+    'all',
+  )
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [unlinkingProvider, setUnlinkingProvider] = useState<'github' | 'gitea' | null>(null)
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<NoticeState>(null)
 
   const refreshDashboard = async () => {
     const [nextOverview, nextActivity, nextInsights] = await Promise.all([
@@ -338,9 +356,13 @@ export function App() {
 
   const filteredManagerRepos = useMemo(() => {
     const query = managerQuery.trim().toLowerCase()
-    if (!query) return managerRepos
-    return managerRepos.filter((repo) => repo.fullName.toLowerCase().includes(query) || repo.provider.includes(query))
-  }, [managerQuery, managerRepos])
+    return managerRepos.filter((repo) => {
+      const matchesQuery =
+        !query || repo.fullName.toLowerCase().includes(query) || repo.provider.includes(query)
+      const matchesStatus = managerSyncFilter === 'all' || repo.syncStatus === managerSyncFilter
+      return matchesQuery && matchesStatus
+    })
+  }, [managerQuery, managerRepos, managerSyncFilter])
 
   const managerStatusCounts = useMemo(() => {
     return managerRepos.reduce(
@@ -406,9 +428,9 @@ export function App() {
       const { nextInsights } = await refreshDashboard()
       const queued = githubResult.queued + giteaResult.queued
       const queueDepth = Math.max(githubResult.queueDepth, giteaResult.queueDepth, nextInsights.queueDepth)
-      setNotice(getQueueNotice(queued, queueDepth))
+      setNotice({ message: getQueueNotice(queued, queueDepth), tone: queued > 0 ? 'success' : 'info' })
     } catch (error) {
-      setNotice(`Sync refresh failed: ${errorMessage(error)}`)
+      setNotice({ message: `Sync refresh failed: ${errorMessage(error)}`, tone: 'error' })
     } finally {
       setSyncing(false)
     }
@@ -428,9 +450,15 @@ export function App() {
         await loadManagerRepos()
       }
       setSelectedRepoId(repoId)
-      setNotice(getQueueNotice(result.queued, result.queueDepth, repo?.fullName ?? 'repository'))
+      setNotice({
+        message: getQueueNotice(result.queued, result.queueDepth, repo?.fullName ?? 'repository'),
+        tone: result.queued > 0 ? 'success' : 'info',
+      })
     } catch (error) {
-      setNotice(`Could not sync ${repo?.provider ?? 'repository'} ${repo?.fullName ?? repoId}: ${errorMessage(error)}`)
+      setNotice({
+        message: `Could not sync ${repo?.provider ?? 'repository'} ${repo?.fullName ?? repoId}: ${errorMessage(error)}`,
+        tone: 'error',
+      })
     } finally {
       setSyncingRepoId(null)
     }
@@ -477,10 +505,10 @@ export function App() {
         setSelectedRepoId(nextSelected)
       }
 
-      setNotice(`${isHidden ? 'Hid' : 'Restored'} ${repo.fullName}.`)
+      setNotice({ message: `${isHidden ? 'Hid' : 'Restored'} ${repo.fullName}.`, tone: 'success' })
     } catch (error) {
       setManagerRepos(previousManagerRepos)
-      setNotice(error instanceof Error ? error.message : 'Could not update repo visibility.')
+      setNotice({ message: error instanceof Error ? error.message : 'Could not update repo visibility.', tone: 'error' })
     } finally {
       setRemovingRepoId(null)
     }
@@ -510,9 +538,9 @@ export function App() {
       await api(`/auth/unlink/${provider}`, { method: 'POST' })
       const me = await api<{ user: User }>('/auth/me')
       setUser(me.user)
-      setNotice(`${provider} disconnected.`)
+      setNotice({ message: `${provider} disconnected.`, tone: 'success' })
     } catch (error) {
-      setNotice(`Could not disconnect ${provider}: ${errorMessage(error)}`)
+      setNotice({ message: `Could not disconnect ${provider}: ${errorMessage(error)}`, tone: 'error' })
     } finally {
       setUnlinkingProvider(null)
     }
@@ -632,7 +660,7 @@ export function App() {
                 Refresh
               </button>
             </div>
-            {notice ? <p className="notice">{notice}</p> : null}
+            {notice ? <p className={`notice notice-${notice.tone}`}>{notice.message}</p> : null}
           </div>
 
           <div className="glass-panel workspace-status-strip">
@@ -749,17 +777,20 @@ export function App() {
                     </button>
                   ))}
                 </div>
-                <div className="segmented-control compact-control repo-filter-control" aria-label="Filter by sync status">
-                  {(['all', 'healthy', 'queued', 'syncing', 'failed', 'unsynced'] as const).map((syncStatus) => (
-                    <button
-                      className={repoSyncFilter === syncStatus ? 'active' : ''}
-                      key={syncStatus}
-                      onClick={() => setRepoSyncFilter(syncStatus)}
-                    >
-                      {syncStatus === 'all' ? 'Any' : syncStatus}
-                    </button>
-                  ))}
-                </div>
+                <label className="repo-status-select" aria-label="Filter by sync status">
+                  <select
+                    value={repoSyncFilter}
+                    onChange={(event) => setRepoSyncFilter(event.target.value as RepoSyncFilter)}
+                  >
+                    <option value="all">Any status</option>
+                    <option value="healthy">Healthy</option>
+                    <option value="queued">Queued</option>
+                    <option value="syncing">Syncing</option>
+                    <option value="failed">Failed</option>
+                    <option value="unsynced">Unsynced</option>
+                  </select>
+                  <ChevronDown size={16} aria-hidden="true" />
+                </label>
               </div>
             </div>
 
@@ -863,6 +894,12 @@ export function App() {
                 </div>
                 <SyncStatusPill status={selectedRepo.syncStatus} />
               </div>
+              {selectedRepo.lastSyncError ? (
+                <div className="detail-error-callout">
+                  <span className="subtle-label">Last sync error</span>
+                  <strong>{selectedRepo.lastSyncError}</strong>
+                </div>
+              ) : null}
               <div className="detail-grid">
                 <div>
                   <span>Last synced</span>
@@ -964,11 +1001,27 @@ export function App() {
               <span className="subtle-label">{managerRepos.filter((repo) => !repo.isHidden).length} visible · {managerRepos.filter((repo) => repo.isHidden).length} hidden</span>
             </div>
 
-            <div className="manager-summary-strip">
-              <StatPill label="Healthy" value={String(managerStatusCounts.healthy)} />
-              <StatPill label="Queued" value={String(managerStatusCounts.queued)} />
-              <StatPill label="Syncing" value={String(managerStatusCounts.syncing)} />
-              <StatPill label="Failed" value={String(managerStatusCounts.failed)} />
+            <div className="manager-filter-row">
+              <label className="manager-select">
+                <span className="subtle-label">Status</span>
+                <div className="manager-select-wrap">
+                  <select
+                    value={managerSyncFilter}
+                    onChange={(event) =>
+                      setManagerSyncFilter(
+                        event.target.value as 'all' | 'healthy' | 'queued' | 'syncing' | 'failed',
+                      )
+                    }
+                  >
+                    <option value="all">All statuses</option>
+                    <option value="healthy">Healthy ({managerStatusCounts.healthy})</option>
+                    <option value="queued">Queued ({managerStatusCounts.queued})</option>
+                    <option value="syncing">Syncing ({managerStatusCounts.syncing})</option>
+                    <option value="failed">Failed ({managerStatusCounts.failed})</option>
+                  </select>
+                  <ChevronDown size={16} />
+                </div>
+              </label>
             </div>
 
             <label className="manager-search">
@@ -1055,7 +1108,13 @@ export function App() {
                 icon={<GitBranch size={20} />}
                 isBusy={unlinkingProvider === 'gitea'}
                 name="Gitea"
-                onConnect={() => void api('/gitea/repos').then(load).catch((error) => setNotice(`Could not connect gitea: ${errorMessage(error)}`))}
+                onConnect={() =>
+                  void api('/gitea/repos')
+                    .then(load)
+                    .catch((error) =>
+                      setNotice({ message: `Could not connect gitea: ${errorMessage(error)}`, tone: 'error' }),
+                    )
+                }
                 onUnlink={() => void unlinkProvider('gitea')}
               />
             </div>

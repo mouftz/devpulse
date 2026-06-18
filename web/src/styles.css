@@ -488,8 +488,32 @@ h2 {
 }
 
 .notice {
+  display: inline-flex;
+  align-items: center;
   margin-top: 18px;
-  color: #a9f0d4;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #d9f7ea;
+  background: rgba(126, 224, 192, 0.08);
+}
+
+.notice-success {
+  color: #bdf7df;
+  background: rgba(126, 224, 192, 0.08);
+  border-color: rgba(126, 224, 192, 0.2);
+}
+
+.notice-info {
+  color: rgba(222, 234, 255, 0.9);
+  background: rgba(77, 171, 247, 0.1);
+  border-color: rgba(77, 171, 247, 0.22);
+}
+
+.notice-error {
+  color: rgba(255, 222, 222, 0.95);
+  background: rgba(255, 120, 120, 0.1);
+  border-color: rgba(255, 120, 120, 0.24);
 }
 
 .glass-panel {
@@ -803,6 +827,7 @@ h2 {
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
+  min-width: 0;
 }
 
 .repo-filter-control {
@@ -810,8 +835,42 @@ h2 {
 }
 
 .repo-filter-control button {
-  min-width: 98px;
+  min-width: 82px;
   white-space: nowrap;
+}
+
+.repo-status-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 150px;
+  min-width: 150px;
+}
+
+.repo-status-select select {
+  width: 100%;
+  height: 44px;
+  padding: 0 38px 0 14px;
+  color: rgba(246, 247, 251, 0.9);
+  font: inherit;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.repo-status-select select:focus {
+  border-color: rgba(119, 224, 196, 0.55);
+  outline: 2px solid rgba(119, 224, 196, 0.16);
+  outline-offset: 1px;
+}
+
+.repo-status-select svg {
+  position: absolute;
+  right: 13px;
+  color: rgba(246, 247, 251, 0.64);
+  pointer-events: none;
 }
 
 .segmented-control {
@@ -1041,6 +1100,22 @@ h2 {
   margin: 8px 0 0;
   color: rgba(246, 247, 251, 0.58);
   font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.detail-error-callout {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: rgba(255, 120, 120, 0.08);
+  border: 1px solid rgba(255, 120, 120, 0.2);
+  border-radius: 8px;
+}
+
+.detail-error-callout strong {
+  display: block;
+  margin-top: 8px;
+  color: rgba(255, 222, 222, 0.92);
+  font-size: 0.95rem;
   line-height: 1.45;
 }
 
@@ -1460,6 +1535,54 @@ h2 {
   margin-bottom: 16px;
 }
 
+.manager-filter-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.manager-select {
+  display: grid;
+  gap: 6px;
+  min-width: min(280px, 100%);
+}
+
+.manager-select-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.manager-select-wrap select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 42px 0 12px;
+  color: #f8fafc;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.065);
+  border: 1px solid rgba(255, 255, 255, 0.11);
+  border-radius: 8px;
+  appearance: none;
+  outline: 0;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    background 160ms ease;
+}
+
+.manager-select-wrap select:focus {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(126, 224, 192, 0.42);
+  box-shadow: 0 0 0 1px rgba(126, 224, 192, 0.18);
+}
+
+.manager-select-wrap svg {
+  position: absolute;
+  right: 12px;
+  color: rgba(246, 247, 251, 0.58);
+  pointer-events: none;
+}
+
 .manager-search {
   display: flex;
   align-items: center;
@@ -1471,13 +1594,6 @@ h2 {
   background: rgba(255, 255, 255, 0.065);
   border: 1px solid rgba(255, 255, 255, 0.11);
   border-radius: 8px;
-}
-
-.manager-summary-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  margin-bottom: 12px;
 }
 
 .manager-search:focus-within {
@@ -1626,7 +1742,9 @@ h2 {
   }
 
   .filter-controls {
-    grid-template-columns: 1fr;
+    display: flex;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
 
   .dashboard {
@@ -1689,6 +1807,14 @@ h2 {
   .settings-row {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .manager-filter-row {
+    justify-content: stretch;
+  }
+
+  .manager-select {
+    min-width: 0;
   }
 
   .manager-row-actions,

@@ -22,7 +22,7 @@ const processJob = async () => {
 
   const repo = await prisma.repo.findUnique({
     where: { id: job.repoId },
-    select: { id: true, fullName: true, githubRepoId: true, ownerId: true, isHidden: true },
+    select: { id: true, fullName: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true, isHidden: true },
   })
   if (!repo || repo.isHidden) {
     return

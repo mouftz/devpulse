@@ -3,6 +3,7 @@ import {
   Activity,
   BrainCircuit,
   CheckCircle2,
+  Clock3,
   ChevronDown,
   ChevronRight,
   Eye,
@@ -208,12 +209,28 @@ type DashboardInsights = {
     actionKind: 'sync' | 'inspect' | 'none'
     repoId?: string
     repoFullName?: string
+    impact: 'high' | 'medium' | 'low'
+    evidence: string
+    metric?: {
+      key: string
+      label: string
+      value: number
+      better: 'higher' | 'lower'
+    }
   }>
 }
 
+type RecommendationMemory = Record<string, {
+  dismissedAt?: string
+  snoozedUntil?: string
+  baseline?: number
+  latest?: number
+  better?: 'higher' | 'lower'
+}>
+
 type LoadState = 'idle' | 'loading' | 'ready' | 'error'
 type RepoSort = 'recent' | 'commits'
-type RangeDays = 30 | 90 | 365
+type RangeDays = 30 | 90 | 365 | 'all'
 type AnalyticsScope = 'mine' | 'all'
 type RepoProviderFilter = 'all' | 'github' | 'gitea'
 type RepoSyncFilter = 'all' | 'healthy' | 'queued' | 'syncing' | 'failed' | 'unsynced'
@@ -328,6 +345,13 @@ export function App() {
   const [connectingProvider, setConnectingProvider] = useState<'gitea' | null>(null)
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [notice, setNotice] = useState<NoticeState>(null)
+  const [recommendationMemory, setRecommendationMemory] = useState<RecommendationMemory>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('devpulse:recommendations') ?? '{}') as RecommendationMemory
+    } catch {
+      return {}
+    }
+  })
 
   const refreshDashboard = async () => {
     const [nextOverview, nextActivity, nextInsights] = await Promise.all([
@@ -668,8 +692,54 @@ export function App() {
     queueDepth: 0,
     recommendations: [],
   }
+  const recommendations = insightSummary.recommendations ?? []
+  const visibleRecommendations = recommendations.filter((recommendation) => {
+    const memory = recommendationMemory[recommendation.id]
+    if (memory?.dismissedAt) return false
+    return !memory?.snoozedUntil || new Date(memory.snoozedUntil) <= new Date()
+  })
+  const hiddenRecommendationCount = recommendations.length - visibleRecommendations.length
+
+  useEffect(() => {
+    setRecommendationMemory((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const recommendation of recommendations) {
+        if (!recommendation.metric) continue
+        const existing = next[recommendation.id] ?? {}
+        if (existing.baseline == null || existing.latest !== recommendation.metric.value) {
+          next[recommendation.id] = {
+            ...existing,
+            baseline: existing.baseline ?? recommendation.metric.value,
+            latest: recommendation.metric.value,
+            better: recommendation.metric.better,
+          }
+          changed = true
+        }
+      }
+      if (changed) localStorage.setItem('devpulse:recommendations', JSON.stringify(next))
+      return changed ? next : current
+    })
+  }, [insights])
+
+  const updateRecommendationMemory = (id: string, update: RecommendationMemory[string]) => {
+    setRecommendationMemory((current) => {
+      const next = { ...current, [id]: { ...current[id], ...update } }
+      localStorage.setItem('devpulse:recommendations', JSON.stringify(next))
+      return next
+    })
+  }
+
+  const restoreRecommendations = () => {
+    const next = Object.fromEntries(Object.entries(recommendationMemory).map(([id, value]) => [
+      id,
+      { ...value, dismissedAt: undefined, snoozedUntil: undefined },
+    ])) as RecommendationMemory
+    localStorage.setItem('devpulse:recommendations', JSON.stringify(next))
+    setRecommendationMemory(next)
+  }
   const syncHealth = getSyncHealthSummary(insightSummary.queueDepth, insightSummary.staleRepos)
-  const rangeLabel = rangeDays === 365 ? 'the last year' : `the last ${rangeDays} days`
+  const rangeLabel = rangeDays === 'all' ? 'all time' : rangeDays === 365 ? 'the last year' : `the last ${rangeDays} days`
   const scopeLabel = analyticsScope === 'mine' ? 'your activity' : 'all contributors'
   const isAuthenticated = Boolean(user)
   const queueActive =
@@ -808,13 +878,13 @@ export function App() {
                 ))}
               </div>
               <div className="segmented-control compact-control" aria-label="Dashboard date range">
-                {([30, 90, 365] as const).map((days) => (
+                {([30, 90, 365, 'all'] as const).map((days) => (
                   <button
                     className={rangeDays === days ? 'active' : ''}
                     key={days}
                     onClick={() => setRangeDays(days)}
                   >
-                    {days === 365 ? '1y' : `${days}d`}
+                    {days === 'all' ? 'All' : days === 365 ? '1y' : `${days}d`}
                   </button>
                 ))}
               </div>
@@ -833,41 +903,85 @@ export function App() {
             <Sparkles size={20} />
           </div>
           <div className="action-insights-list">
-            {(insightSummary.recommendations ?? []).map((recommendation) => (
-              <article className={`action-insight ${recommendation.severity}`} key={recommendation.id}>
-                <span className="action-insight-signal" aria-hidden="true" />
-                <div>
-                  {recommendation.repoFullName ? (
-                    <span className="action-insight-repo">{recommendation.repoFullName}</span>
-                  ) : null}
-                  <strong>{recommendation.title}</strong>
-                  <p>{recommendation.detail}</p>
-                </div>
-                {recommendation.actionKind === 'sync' && recommendation.repoId ? (
-                  <button
-                    className="secondary-button compact-button"
-                    onClick={() => void syncRepo(recommendation.repoId!)}
-                    disabled={syncingRepoId === recommendation.repoId}
-                  >
-                    {syncingRepoId === recommendation.repoId ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
-                    {recommendation.actionLabel}
-                  </button>
-                ) : recommendation.actionKind === 'inspect' && recommendation.repoId ? (
-                  <button
-                    className="secondary-button compact-button"
-                    onClick={() => {
-                      setSelectedRepoId(recommendation.repoId!)
-                      window.requestAnimationFrame(() => document.querySelector('.detail-panel')?.scrollIntoView({ behavior: 'smooth' }))
-                    }}
-                  >
-                    {recommendation.actionLabel}
-                  </button>
-                ) : (
-                  <span className="action-insight-label">{recommendation.actionLabel}</span>
-                )}
-              </article>
-            ))}
+            {visibleRecommendations.map((recommendation) => {
+              const memory = recommendationMemory[recommendation.id]
+              const baseline = memory?.baseline
+              const current = recommendation.metric?.value
+              const change = baseline != null && current != null && baseline !== 0
+                ? ((current - baseline) / Math.abs(baseline)) * 100
+                : null
+              const improved = change != null && (recommendation.metric?.better === 'lower' ? change < 0 : change > 0)
+              return (
+                <article className={`action-insight ${recommendation.severity}`} key={recommendation.id}>
+                  <span className="action-insight-signal" aria-hidden="true" />
+                  <div className="action-insight-content">
+                    <div className="action-insight-topline">
+                      <span className={`impact-pill ${recommendation.impact}`}>{recommendation.impact} impact</span>
+                      <span className="action-insight-controls">
+                        <button
+                          type="button"
+                          title="Snooze for 7 days"
+                          onClick={() => updateRecommendationMemory(recommendation.id, {
+                            snoozedUntil: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+                          })}
+                        >
+                          <Clock3 size={15} />
+                        </button>
+                        <button
+                          type="button"
+                          title="Dismiss recommendation"
+                          onClick={() => updateRecommendationMemory(recommendation.id, { dismissedAt: new Date().toISOString() })}
+                        >
+                          <X size={15} />
+                        </button>
+                      </span>
+                    </div>
+                    {recommendation.repoFullName ? (
+                      <span className="action-insight-repo">{recommendation.repoFullName}</span>
+                    ) : null}
+                    <strong>{recommendation.title}</strong>
+                    <p>{recommendation.detail}</p>
+                    <span className="action-insight-evidence">Evidence: {recommendation.evidence}</span>
+                    {change != null ? (
+                      <span className={`action-insight-progress ${improved ? 'improved' : change === 0 ? 'steady' : 'regressed'}`}>
+                        {improved ? 'Improved' : change === 0 ? 'No change yet' : 'Needs attention'}
+                        {' · '}{Math.abs(change).toFixed(0)}% {change < 0 ? 'lower' : 'higher'} than first observed
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="action-insight-footer">
+                    {recommendation.actionKind === 'sync' && recommendation.repoId ? (
+                      <button
+                        className="secondary-button compact-button"
+                        onClick={() => void syncRepo(recommendation.repoId!)}
+                        disabled={syncingRepoId === recommendation.repoId}
+                      >
+                        {syncingRepoId === recommendation.repoId ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+                        {recommendation.actionLabel}
+                      </button>
+                    ) : recommendation.actionKind === 'inspect' && recommendation.repoId ? (
+                      <button
+                        className="secondary-button compact-button"
+                        onClick={() => {
+                          setSelectedRepoId(recommendation.repoId!)
+                          window.requestAnimationFrame(() => document.querySelector('.detail-panel')?.scrollIntoView({ behavior: 'smooth' }))
+                        }}
+                      >
+                        {recommendation.actionLabel}
+                      </button>
+                    ) : (
+                      <span className="action-insight-label">{recommendation.actionLabel}</span>
+                    )}
+                  </div>
+                </article>
+              )
+            })}
           </div>
+          {hiddenRecommendationCount > 0 ? (
+            <button className="recommendation-restore" type="button" onClick={restoreRecommendations}>
+              Show {hiddenRecommendationCount} hidden recommendation{hiddenRecommendationCount === 1 ? '' : 's'}
+            </button>
+          ) : null}
         </section>
         ) : null}
 
@@ -1045,7 +1159,7 @@ export function App() {
               <div>
                 <span className="subtle-label">Commit trend</span>
                 <strong>{repoActivity?.total ?? 0} commits</strong>
-                <p>{rangeDays === 365 ? 'Across the last year' : `Across the last ${rangeDays} days`}</p>
+                <p>{rangeDays === 'all' ? 'Across all recorded history' : rangeDays === 365 ? 'Across the last year' : `Across the last ${rangeDays} days`}</p>
               </div>
               <RepoActivityChart days={repoActivity?.days ?? []} />
             </div>

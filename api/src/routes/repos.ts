@@ -81,10 +81,27 @@ type ActionableInsight = {
   actionKind: 'sync' | 'inspect' | 'none'
   repoId?: string
   repoFullName?: string
+  impact: 'high' | 'medium' | 'low'
+  evidence: string
+  metric?: {
+    key: string
+    label: string
+    value: number
+    better: 'higher' | 'lower'
+  }
 }
 type AnalyticsUser = {
   username: string
   giteaUsername: string | null
+}
+
+const analyticsWindow = (value: string | undefined, fallback: number, minimum: number) => {
+  if (value === 'all') return { dayCount: 0, start: null }
+  const dayCount = Math.min(Math.max(Number(value ?? fallback), minimum), 365)
+  const start = new Date()
+  start.setUTCDate(start.getUTCDate() - (dayCount - 1))
+  start.setUTCHours(0, 0, 0, 0)
+  return { dayCount, start }
 }
 
 const PROVIDER_REQUEST_CONCURRENCY = Math.max(1, Math.min(20, Number(process.env.PROVIDER_REQUEST_CONCURRENCY ?? 5)))
@@ -688,11 +705,8 @@ export async function repoRoutes(app: FastifyInstance) {
     }
     const scope = analyticsScope(request.query.scope)
 
-    const dayCount = Math.min(Math.max(Number(request.query.days ?? 365), 7), 365)
+    const { dayCount, start } = analyticsWindow(request.query.days, 365, 7)
     const end = new Date()
-    const start = new Date(end)
-    start.setUTCDate(start.getUTCDate() - (dayCount - 1))
-    start.setUTCHours(0, 0, 0, 0)
 
     const repo = await prisma.repo.findFirst({
       where: {
@@ -710,7 +724,7 @@ export async function repoRoutes(app: FastifyInstance) {
     const pullRequests = await prisma.pullRequest.findMany({
       where: {
         repoId: repo.id,
-        mergedAt: { not: null, gte: start, lte: end },
+        mergedAt: { not: null, ...(start ? { gte: start } : {}), lte: end },
         ...authorFilter(scope, user),
       },
       select: {
@@ -724,7 +738,8 @@ export async function repoRoutes(app: FastifyInstance) {
     for (const pullRequest of pullRequests) {
       if (!pullRequest.mergedAt) continue
 
-      const weekStart = new Date(pullRequest.openedAt)
+      // The range is based on merge time, so bucket and label points by merge time too.
+      const weekStart = new Date(pullRequest.mergedAt)
       weekStart.setUTCHours(0, 0, 0, 0)
       weekStart.setUTCDate(weekStart.getUTCDate() - weekStart.getUTCDay())
       const week = weekStart.toISOString().slice(0, 10)
@@ -772,11 +787,8 @@ export async function repoRoutes(app: FastifyInstance) {
     }
     const scope = analyticsScope(request.query.scope)
 
-    const dayCount = Math.min(Math.max(Number(request.query.days ?? 90), 7), 365)
+    const { start } = analyticsWindow(request.query.days, 90, 7)
     const end = new Date()
-    const start = new Date(end)
-    start.setUTCDate(start.getUTCDate() - (dayCount - 1))
-    start.setUTCHours(0, 0, 0, 0)
 
     const repo = await prisma.repo.findFirst({
       where: {
@@ -793,7 +805,7 @@ export async function repoRoutes(app: FastifyInstance) {
     const pullRequests = await prisma.pullRequest.findMany({
       where: {
         repoId: repo.id,
-        openedAt: { gte: start, lte: end },
+        openedAt: { ...(start ? { gte: start } : {}), lte: end },
         ...authorFilter(scope, user),
         reviews: { some: { timeToReviewMins: { not: null } } },
       },
@@ -963,11 +975,8 @@ export async function repoRoutes(app: FastifyInstance) {
       return
     }
     const scope = analyticsScope(request.query.scope)
-    const dayCount = Math.min(Math.max(Number(request.query.days ?? 90), 1), 365)
+    const { dayCount, start } = analyticsWindow(request.query.days, 90, 1)
     const end = new Date()
-    const start = new Date(end)
-    start.setUTCDate(start.getUTCDate() - (dayCount - 1))
-    start.setUTCHours(0, 0, 0, 0)
 
     const visibleRepos = await prisma.repo.findMany({
       where: { ownerId: user.id, isHidden: false },
@@ -985,7 +994,7 @@ export async function repoRoutes(app: FastifyInstance) {
         where: {
           repo: { ownerId: user.id, isHidden: false },
           ...authorFilter(scope, user),
-          committedAt: { gte: start, lte: end },
+          committedAt: { ...(start ? { gte: start } : {}), lte: end },
         },
         select: { repoId: true },
       }),
@@ -993,7 +1002,7 @@ export async function repoRoutes(app: FastifyInstance) {
         where: {
           repo: { ownerId: user.id, isHidden: false },
           ...authorFilter(scope, user),
-          mergedAt: { not: null, gte: start, lte: end },
+          mergedAt: { not: null, ...(start ? { gte: start } : {}), lte: end },
         },
         select: { repoId: true, openedAt: true, mergedAt: true },
       }),
@@ -1001,7 +1010,7 @@ export async function repoRoutes(app: FastifyInstance) {
         where: {
           repo: { ownerId: user.id, isHidden: false },
           ...authorFilter(scope, user),
-          openedAt: { gte: start, lte: end },
+          openedAt: { ...(start ? { gte: start } : {}), lte: end },
           reviews: { some: { timeToReviewMins: { not: null } } },
         },
         select: {
@@ -1054,6 +1063,8 @@ export async function repoRoutes(app: FastifyInstance) {
         actionKind: 'sync',
         repoId: failedRepo.id,
         repoFullName: failedRepo.fullName,
+        impact: 'high',
+        evidence: 'The latest repository sync ended in a failed state.',
       })
     }
 
@@ -1074,6 +1085,10 @@ export async function repoRoutes(app: FastifyInstance) {
         actionKind: 'sync',
         repoId: staleRepo.id,
         repoFullName: staleRepo.fullName,
+        impact: staleRepo.lastSyncedAt ? 'medium' : 'high',
+        evidence: staleRepo.lastSyncedAt
+          ? `Last successful sync was ${Math.floor((end.getTime() - staleRepo.lastSyncedAt.getTime()) / 86_400_000)} days ago.`
+          : 'No successful sync has been recorded.',
       })
     }
 
@@ -1100,6 +1115,14 @@ export async function repoRoutes(app: FastifyInstance) {
         ...(repoNames.get(slowestReviewRepo.repoId)
           ? { repoFullName: repoNames.get(slowestReviewRepo.repoId)! }
           : {}),
+        impact: slowestReviewRepo.average > 48 ? 'high' : 'medium',
+        evidence: `${reviewHoursByRepo.get(slowestReviewRepo.repoId)?.count ?? 0} reviewed pull requests in this timeframe.`,
+        metric: {
+          key: `review-latency-${slowestReviewRepo.repoId}`,
+          label: 'First-review latency',
+          value: slowestReviewRepo.average,
+          better: 'lower',
+        },
       })
     }
 
@@ -1126,6 +1149,14 @@ export async function repoRoutes(app: FastifyInstance) {
         ...(repoNames.get(slowestCycleRepo.repoId)
           ? { repoFullName: repoNames.get(slowestCycleRepo.repoId)! }
           : {}),
+        impact: slowestCycleRepo.average > 168 ? 'high' : 'medium',
+        evidence: `${cycleHoursByRepo.get(slowestCycleRepo.repoId)?.count ?? 0} merged pull requests in this timeframe.`,
+        metric: {
+          key: `pr-cycle-${slowestCycleRepo.repoId}`,
+          label: 'Average PR cycle',
+          value: slowestCycleRepo.average,
+          better: 'lower',
+        },
       })
     }
 
@@ -1145,6 +1176,14 @@ export async function repoRoutes(app: FastifyInstance) {
         actionKind: 'inspect',
         repoId: busiestRepo[0],
         ...(repo?.fullName ? { repoFullName: repo.fullName } : {}),
+        impact: 'low',
+        evidence: `${busiestRepo[1]} of ${commits.length} commits came from this repository.`,
+        metric: {
+          key: `activity-share-${busiestRepo[0]}`,
+          label: 'Workspace commit share',
+          value: (busiestRepo[1] / commits.length) * 100,
+          better: 'lower',
+        },
       })
     }
 
@@ -1156,6 +1195,8 @@ export async function repoRoutes(app: FastifyInstance) {
         detail: 'Sync health, review latency, and pull request cycle time are within the current thresholds.',
         actionLabel: 'Keep monitoring',
         actionKind: 'none',
+        impact: 'low',
+        evidence: 'No configured sync, review, or cycle-time threshold is currently breached.',
       })
     }
 
@@ -1300,11 +1341,8 @@ export async function repoRoutes(app: FastifyInstance) {
     }
     const scope = analyticsScope(request.query.scope)
 
-    const dayCount = Math.min(Math.max(Number(request.query.days ?? 365), 1), 365)
+    const { start: requestedStart } = analyticsWindow(request.query.days, 365, 1)
     const end = new Date()
-    const start = new Date(end)
-    start.setUTCDate(start.getUTCDate() - (dayCount - 1))
-    start.setUTCHours(0, 0, 0, 0)
 
     if (request.query.repoId) {
       const repo = await prisma.repo.findFirst({
@@ -1329,13 +1367,19 @@ export async function repoRoutes(app: FastifyInstance) {
           ...(request.query.repoId ? { id: request.query.repoId } : {}),
         },
         ...authorFilter(scope, user),
-        committedAt: { gte: start, lte: end },
+        committedAt: { ...(requestedStart ? { gte: requestedStart } : {}), lte: end },
       },
       select: { committedAt: true },
     })
 
+    const start = requestedStart ?? commits.reduce<Date | null>((earliest, commit) => {
+      return !earliest || commit.committedAt < earliest ? commit.committedAt : earliest
+    }, null) ?? end
+    const normalizedStart = new Date(start)
+    normalizedStart.setUTCHours(0, 0, 0, 0)
+
     const counts = new Map<string, number>()
-    for (let cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    for (let cursor = new Date(normalizedStart); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
       counts.set(cursor.toISOString().slice(0, 10), 0)
     }
 

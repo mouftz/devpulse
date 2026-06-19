@@ -12,7 +12,7 @@ The zero-cost deployment uses:
 - Upstash Free for Redis
 
 1. Create a Neon Free project and copy its pooled PostgreSQL connection string.
-2. Create an Upstash Redis Free database and copy its TLS `rediss://` URL.
+2. Create an Upstash Redis Free database and copy its TLS `rediss://` URL, REST URL, and REST token.
 3. Push the repository, then create a Render Blueprint from `render.yaml`.
 4. Supply the prompted database, Redis, OAuth, service, and frontend values.
 5. After Render assigns URLs, set the values below and redeploy the affected services.
@@ -22,6 +22,8 @@ The zero-cost deployment uses:
 | --- | --- | --- |
 | `DATABASE_URL` | API + ML | Neon pooled connection string |
 | `REDIS_URL` | API | Upstash `rediss://` connection string |
+| `UPSTASH_REDIS_REST_URL` | API | Upstash HTTPS REST endpoint |
+| `UPSTASH_REDIS_REST_TOKEN` | API | Upstash REST token |
 | `ML_SERVICE_URL` | API | `https://devpulse-ml.onrender.com` (use the actual assigned URL) |
 | `VITE_API_URL` | Web | `https://devpulse-api.onrender.com` (use the actual assigned URL) |
 | `FRONTEND_URL` | API | The assigned `devpulse-web` URL |

@@ -30,6 +30,10 @@ services:
         sync: false
       - key: REDIS_URL
         sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
       - key: ML_SERVICE_URL
         sync: false
       - key: ML_SERVICE_TOKEN

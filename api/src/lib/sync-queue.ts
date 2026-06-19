@@ -14,6 +14,8 @@ export type SyncJob = {
 }
 
 const REDIS_URL = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379'
+const UPSTASH_REDIS_REST_URL = process.env.UPSTASH_REDIS_REST_URL?.replace(/\/$/, '')
+const UPSTASH_REDIS_REST_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN
 const SYNC_QUEUE_KEY = 'devpulse:sync_queue'
 
 let redisClient: Redis | null = null
@@ -45,8 +47,36 @@ export const queueKey = SYNC_QUEUE_KEY
 
 export const repoProvider = normalizeRepoProvider
 
+const upstashCommand = async <T>(...command: string[]): Promise<T> => {
+  if (!UPSTASH_REDIS_REST_URL || !UPSTASH_REDIS_REST_TOKEN) {
+    throw new Error('Upstash REST is not configured')
+  }
+
+  const response = await fetch(UPSTASH_REDIS_REST_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(command),
+  })
+  const body = await response.json() as { result?: T; error?: string }
+  if (!response.ok || body.error) {
+    throw new Error(body.error ?? `Upstash returned ${response.status}`)
+  }
+  return body.result as T
+}
+
+const upstashTransport: QueueTransport = {
+  push: async (payload) => {
+    await upstashCommand<number>('LPUSH', SYNC_QUEUE_KEY, payload)
+  },
+  pop: () => upstashCommand<string | null>('RPOP', SYNC_QUEUE_KEY),
+  depth: () => upstashCommand<number>('LLEN', SYNC_QUEUE_KEY),
+}
+
 const queueTransport = (): QueueTransport =>
-  queueTransportOverride ?? {
+  queueTransportOverride ?? (UPSTASH_REDIS_REST_URL && UPSTASH_REDIS_REST_TOKEN ? upstashTransport : {
     push: async (payload: string) => {
       await redis().lpush(SYNC_QUEUE_KEY, payload)
     },
@@ -56,7 +86,7 @@ const queueTransport = (): QueueTransport =>
       return redis().rpop(SYNC_QUEUE_KEY)
     },
     depth: async () => redis().llen(SYNC_QUEUE_KEY),
-  }
+  })
 
 export const setQueueTransportForTests = (transport: QueueTransport | null) => {
   queueTransportOverride = transport

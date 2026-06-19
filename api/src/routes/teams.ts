@@ -67,7 +67,7 @@ export async function teamRoutes(app: FastifyInstance) {
         team: {
           include: {
             repos: { include: { repo: { include: { _count: { select: { commits: true, pullRequests: true } } } } } },
-            members: { include: { user: { select: { id: true, username: true, avatarUrl: true } } } },
+            members: { include: { user: { select: { id: true, username: true, giteaUsername: true, avatarUrl: true } } } },
           },
         },
       },
@@ -75,12 +75,17 @@ export async function teamRoutes(app: FastifyInstance) {
     if (!membership) return reply.code(404).send({ error: 'Team not found' })
     const repos = membership.team.repos.map(({ repo }) => repo)
     const repoIds = repos.map((repo) => repo.id)
-    const [mergedPullRequests, reviews] = repoIds.length
+    const [mergedPullRequests, reviews, commitAuthors, pullRequestAuthors] = repoIds.length
       ? await Promise.all([
           prisma.pullRequest.count({ where: { repoId: { in: repoIds }, mergedAt: { not: null } } }),
           prisma.prReview.count({ where: { pullRequest: { repoId: { in: repoIds } } } }),
+          prisma.commit.groupBy({ by: ['authorGithubId'], where: { repoId: { in: repoIds } }, _count: { _all: true } }),
+          prisma.pullRequest.groupBy({ by: ['authorGithubId'], where: { repoId: { in: repoIds } }, _count: { _all: true } }),
         ])
-      : [0, 0]
+      : [0, 0, [], []]
+    const authorCount = (rows: Array<{ authorGithubId: string; _count: { _all: number } }>, identities: string[]) =>
+      rows.filter((row) => identities.some((identity) => identity.toLowerCase() === row.authorGithubId.toLowerCase()))
+        .reduce((sum, row) => sum + row._count._all, 0)
     return {
       team: { id: membership.team.id, name: membership.team.name, slug: membership.team.slug, role: membership.role },
       totals: {
@@ -98,7 +103,17 @@ export async function teamRoutes(app: FastifyInstance) {
         pullRequests: repo._count.pullRequests,
         lastSyncedAt: repo.lastSyncedAt,
       })),
-      members: membership.team.members.map((member) => ({ ...member.user, role: member.role })),
+      members: membership.team.members.map((member) => {
+        const identities = [member.user.username, member.user.giteaUsername].filter((value): value is string => Boolean(value))
+        return {
+          id: member.user.id,
+          username: member.user.username,
+          avatarUrl: member.user.avatarUrl,
+          role: member.role,
+          commits: authorCount(commitAuthors, identities),
+          pullRequests: authorCount(pullRequestAuthors, identities),
+        }
+      }),
     }
   })
 

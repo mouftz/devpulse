@@ -200,6 +200,20 @@ test('GET /github/overview rejects missing bearer or session auth', async () => 
   }
 })
 
+test('team routes reject unauthenticated access', async () => {
+  const app = createApp()
+  try {
+    const [listResponse, createResponse] = await Promise.all([
+      app.inject({ method: 'GET', url: '/teams' }),
+      app.inject({ method: 'POST', url: '/teams', payload: { name: 'Engineering' } }),
+    ])
+    assert.equal(listResponse.statusCode, 401)
+    assert.equal(createResponse.statusCode, 401)
+  } finally {
+    await app.close()
+  }
+})
+
 test('POST /github/repos/:repoId/visibility validates isHidden for authenticated requests', async () => {
   const app = createApp()
   const originalFindUnique = prisma.user.findUnique

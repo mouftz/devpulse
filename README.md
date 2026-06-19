@@ -26,6 +26,8 @@ recommendation to the repository and evidence that produced it.
 
 - GitHub OAuth sign-in with an HTTP-only session cookie
 - Per-user Gitea connections for any compatible server, with encrypted access-token storage
+- Supervisor team workspaces with explicit shared-repository assignment and role-based membership
+- Team-only delivery totals for commits, pull requests, merges, and reviews without exposing personal repos
 - Background repo sync queue backed by Redis
 - Manual sync actions for all visible repos or a single repo
 - Nightly / catch-up sync worker flow
@@ -298,6 +300,10 @@ npm test
 | `/gitea/connect` | POST | Validate and securely save the current user's Gitea connection |
 | `/gitea/repos/sync-all/background` | POST | Queue all visible Gitea repos |
 | `/gitea/repos/:repoId/sync/background` | POST | Queue one Gitea repo |
+| `/teams` | GET / POST | List or create team workspaces |
+| `/teams/:teamId` | GET | Read metrics from explicitly shared team repositories |
+| `/teams/:teamId/repos` | PUT | Replace the team's shared repository set (owner/admin) |
+| `/teams/:teamId/members` | POST | Add a signed-up DevPulse user to a team (owner/admin) |
 
 ## Project Layout
 

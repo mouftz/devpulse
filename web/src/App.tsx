@@ -77,7 +77,7 @@ type TeamDashboard = {
   team: { id: string; name: string; slug: string; role: string }
   totals: { repositories: number; commits: number; pullRequests: number; mergedPullRequests: number; reviews: number }
   repositories: Array<{ id: string; provider: string; fullName: string; commits: number; pullRequests: number; lastSyncedAt: string | null }>
-  members: Array<{ id: string; username: string; avatarUrl: string | null; role: string }>
+  members: Array<{ id: string; username: string; avatarUrl: string | null; role: string; commits: number; pullRequests: number }>
 }
 
 type ActivityDay = {
@@ -1669,7 +1669,7 @@ export function App() {
                   <section>
                     <div className="team-section-heading"><div><p className="eyebrow">Members</p><h3>{teamDashboard.members.length} teammates</h3></div></div>
                     {['owner', 'admin'].includes(teamDashboard.team.role) ? <div className="team-inline-form"><input value={teamMemberUsername} onChange={(event) => setTeamMemberUsername(event.target.value)} placeholder="GitHub username" /><button className="secondary-button compact-button" onClick={() => void addTeamMember()} disabled={teamBusy || !teamMemberUsername.trim()}>Add</button></div> : null}
-                    <div className="team-member-list">{teamDashboard.members.map((member) => <div key={member.id}>{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : <Users size={18} />}<span><strong>{member.username}</strong><small>{member.role}</small></span></div>)}</div>
+                    <div className="team-member-list">{teamDashboard.members.map((member) => <div key={member.id}>{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : <Users size={18} />}<span><strong>{member.username}</strong><small>{member.role} · {member.commits} commits · {member.pullRequests} PRs in shared repos</small></span></div>)}</div>
                   </section>
                 </div>
               </>

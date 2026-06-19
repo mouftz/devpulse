@@ -51,7 +51,9 @@ const queueTransport = (): QueueTransport =>
       await redis().lpush(SYNC_QUEUE_KEY, payload)
     },
     pop: async () => {
-      const result = await redis().brpop(SYNC_QUEUE_KEY, 0)
+      // Keep the blocking window below managed Redis idle timeouts so a
+      // provider disconnect cannot strand an indefinitely pending command.
+      const result = await redis().brpop(SYNC_QUEUE_KEY, 5)
       return result?.[1] ?? null
     },
     depth: async () => redis().llen(SYNC_QUEUE_KEY),

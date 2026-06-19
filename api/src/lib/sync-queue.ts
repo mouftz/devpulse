@@ -34,6 +34,9 @@ const redis = () => {
       retryStrategy: () => null,
     })
     redisClient.on('error', () => {})
+    redisClient.on('end', () => {
+      redisClient = null
+    })
   }
   return redisClient
 }

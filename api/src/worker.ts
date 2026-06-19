@@ -18,6 +18,8 @@ const log = (...values: unknown[]) => {
   console.log('[worker]', ...values)
 }
 
+const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+
 const scheduleDueRepos = async (reason: 'nightly' | 'catchup') => {
   const queued = await enqueueDueRepos(reason)
   log(`queued ${queued} repos for ${reason}`)
@@ -83,7 +85,14 @@ const runLoop = async () => {
   }, ML_TRAIN_INTERVAL_SECONDS * 1000)
 
   while (true) {
-    const job = await popSyncJob()
+    let job: SyncJob | null
+    try {
+      job = await popSyncJob()
+    } catch (error) {
+      log('queue unavailable; retrying in 5s', error instanceof Error ? error.message : error)
+      await sleep(5_000)
+      continue
+    }
     if (!job) continue
 
     try {

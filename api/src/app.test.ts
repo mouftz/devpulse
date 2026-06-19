@@ -26,6 +26,27 @@ test('GET /health returns ok', async () => {
   }
 })
 
+test('CORS preflight allows team write methods', async () => {
+  const app = createApp()
+  try {
+    const response = await app.inject({
+      method: 'OPTIONS',
+      url: '/teams/team-1/repos',
+      headers: {
+        origin: 'http://localhost:5173',
+        'access-control-request-method': 'PUT',
+        'access-control-request-headers': 'content-type',
+      },
+    })
+
+    assert.equal(response.statusCode, 204)
+    assert.match(String(response.headers['access-control-allow-methods']), /PUT/)
+    assert.match(String(response.headers['access-control-allow-methods']), /DELETE/)
+  } finally {
+    await app.close()
+  }
+})
+
 test('GET /auth/me rejects missing session', async () => {
   const app = createApp()
   try {

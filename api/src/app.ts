@@ -19,6 +19,7 @@ export const createApp = () => {
 
   app.register(cors, {
     credentials: true,
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     origin: frontendUrl ? [frontendUrl] : !isProduction,
   })
   app.register(cookie)

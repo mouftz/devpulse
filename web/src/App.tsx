@@ -39,6 +39,7 @@ type User = {
   githubId: string
   username: string
   giteaUsername: string | null
+  giteaBaseUrl: string | null
   email: string
   avatarUrl: string | null
   githubConnected: boolean
@@ -343,6 +344,9 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [unlinkingProvider, setUnlinkingProvider] = useState<'github' | 'gitea' | null>(null)
   const [connectingProvider, setConnectingProvider] = useState<'gitea' | null>(null)
+  const [giteaFormOpen, setGiteaFormOpen] = useState(false)
+  const [giteaBaseUrl, setGiteaBaseUrl] = useState('')
+  const [giteaToken, setGiteaToken] = useState('')
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null)
   const [notice, setNotice] = useState<NoticeState>(null)
   const [recommendationMemory, setRecommendationMemory] = useState<RecommendationMemory>(() => {
@@ -370,6 +374,7 @@ export function App() {
     try {
       const me = await api<{ user: User }>('/auth/me')
       setUser(me.user)
+      setGiteaBaseUrl(me.user.giteaBaseUrl ?? '')
 
       await Promise.all([api('/github/repos'), api('/gitea/repos').catch(() => null)])
       const { nextOverview } = await refreshDashboard()
@@ -606,6 +611,8 @@ export function App() {
 
   const closeSettings = () => {
     setSettingsOpen(false)
+    setGiteaFormOpen(false)
+    setGiteaToken('')
   }
 
   const unlinkProvider = async (provider: 'github' | 'gitea') => {
@@ -615,6 +622,11 @@ export function App() {
       await api(`/auth/unlink/${provider}`, { method: 'POST' })
       const me = await api<{ user: User }>('/auth/me')
       setUser(me.user)
+      if (provider === 'gitea') {
+        setGiteaBaseUrl('')
+        setGiteaToken('')
+        setGiteaFormOpen(false)
+      }
       setNotice({ message: `${provider} disconnected.`, tone: 'success' })
     } catch (error) {
       setNotice({ message: `Could not disconnect ${provider}: ${errorMessage(error)}`, tone: 'error' })
@@ -627,9 +639,16 @@ export function App() {
     setConnectingProvider('gitea')
     setNotice(null)
     try {
+      await api('/gitea/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ baseUrl: giteaBaseUrl, token: giteaToken }),
+      })
       await api('/gitea/repos')
       const me = await api<{ user: User }>('/auth/me')
       setUser(me.user)
+      setGiteaToken('')
+      setGiteaFormOpen(false)
       await refreshDashboard()
       setNotice({ message: 'Gitea connected and repositories refreshed.', tone: 'success' })
     } catch (error) {
@@ -815,7 +834,7 @@ export function App() {
                 Sync All Repos
               </button>
               {!user?.giteaConnected ? (
-                <button className="secondary-button" onClick={() => void api('/gitea/repos').then(load)}>
+                <button className="secondary-button" onClick={() => { setSettingsOpen(true); setGiteaFormOpen(true) }}>
                   <GitBranch size={18} />
                   Add Gitea
                 </button>
@@ -1428,14 +1447,51 @@ export function App() {
               />
               <ProviderSetting
                 connected={user.giteaConnected}
-                detail={user.giteaConnected ? `Connected as ${user.giteaUsername}` : 'Disconnected. Gitea uses your local env token.'}
+                detail={user.giteaConnected ? `Connected as ${user.giteaUsername}` : 'Connect any Gitea server with your own access token.'}
                 icon={<GitBranch size={20} />}
                 isBusy={unlinkingProvider === 'gitea' || connectingProvider === 'gitea'}
                 name="Gitea"
-                onConnect={() => void connectGitea()}
+                onConnect={() => setGiteaFormOpen((open) => !open)}
                 onUnlink={() => void unlinkProvider('gitea')}
               />
             </div>
+
+            {!user.giteaConnected && giteaFormOpen ? (
+              <form className="gitea-connect-form" onSubmit={(event) => { event.preventDefault(); void connectGitea() }}>
+                <div>
+                  <strong>Connect your Gitea account</strong>
+                  <span>Use your server URL and a personal access token. DevPulse encrypts the token before storing it.</span>
+                </div>
+                <label>
+                  <span>Server URL</span>
+                  <input
+                    type="url"
+                    value={giteaBaseUrl}
+                    onChange={(event) => setGiteaBaseUrl(event.target.value)}
+                    placeholder="https://gitea.example.com"
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Personal access token</span>
+                  <input
+                    type="password"
+                    value={giteaToken}
+                    onChange={(event) => setGiteaToken(event.target.value)}
+                    placeholder="Paste token"
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+                <div className="gitea-connect-actions">
+                  <button type="button" className="secondary-button compact-button" onClick={() => { setGiteaFormOpen(false); setGiteaToken('') }}>Cancel</button>
+                  <button type="submit" className="primary-button compact-button" disabled={connectingProvider === 'gitea'}>
+                    {connectingProvider === 'gitea' ? <Loader2 className="spin" size={16} /> : <GitBranch size={16} />}
+                    {connectingProvider === 'gitea' ? 'Connecting' : 'Connect Gitea'}
+                  </button>
+                </div>
+              </form>
+            ) : null}
 
             <div className="settings-system">
               <p className="eyebrow">Infrastructure</p>
@@ -1451,7 +1507,7 @@ export function App() {
                   <StatPill label="Queued repos" value={String(systemStatus.sync.repos.queued)} />
                   <StatPill label="Failed repos" value={String(systemStatus.sync.repos.failed)} />
                   <StatPill label="GitHub OAuth" value={systemStatus.providers.githubOauthConfigured ? 'Ready' : 'Missing'} />
-                  <StatPill label="Gitea env" value={systemStatus.providers.giteaConfigured ? 'Ready' : 'Missing'} />
+                  <StatPill label="Gitea connection" value={systemStatus.providers.giteaConfigured ? 'Ready' : 'Missing'} />
                 </div>
               ) : (
                 <div className="empty-state small">System status is unavailable right now.</div>

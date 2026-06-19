@@ -103,14 +103,17 @@ test('POST /auth/unlink/github clears the saved GitHub token', async () => {
   }
 })
 
-test('POST /auth/unlink/gitea clears the saved Gitea username', async () => {
+test('POST /auth/unlink/gitea clears all saved Gitea credentials', async () => {
   const app = createApp()
   const originalUserUpdate = prisma.user.update
+  let updateArgs: unknown
 
-  prisma.user.update = (async () =>
-    ({
+  prisma.user.update = (async (args: Parameters<typeof prisma.user.update>[0]) => {
+    updateArgs = args
+    return {
       id: 'user-1',
-    })) as unknown as typeof prisma.user.update
+    }
+  }) as unknown as typeof prisma.user.update
 
   try {
     const response = await app.inject({
@@ -121,6 +124,10 @@ test('POST /auth/unlink/gitea clears the saved Gitea username', async () => {
 
     assert.equal(response.statusCode, 200)
     assert.deepEqual(response.json(), { provider: 'gitea', connected: false })
+    assert.deepEqual(updateArgs, {
+      where: { id: 'user-1' },
+      data: { giteaUsername: null, giteaBaseUrl: null, giteaToken: null },
+    })
   } finally {
     prisma.user.update = originalUserUpdate
     await app.close()
@@ -130,6 +137,7 @@ test('POST /auth/unlink/gitea clears the saved Gitea username', async () => {
 test('GET /auth/system returns API, sync, and provider status for an authenticated session', async () => {
   const app = createApp()
   const originalRepoFindMany = prisma.repo.findMany
+  const originalUserFindUnique = prisma.user.findUnique
   let queryCount = 0
 
   prisma.repo.findMany = (async () => {
@@ -145,6 +153,10 @@ test('GET /auth/system returns API, sync, and provider status for an authenticat
       lastSyncFinishedAt: new Date('2026-06-18T10:00:00.000Z'),
     }]
   }) as unknown as typeof prisma.repo.findMany
+  prisma.user.findUnique = (async () => ({
+    giteaBaseUrl: 'https://gitea.example.com',
+    giteaToken: 'encrypted-token',
+  })) as unknown as typeof prisma.user.findUnique
 
   try {
     const response = await app.inject({
@@ -165,8 +177,10 @@ test('GET /auth/system returns API, sync, and provider status for an authenticat
     assert.equal(payload.sync.recentFailures[0].fullName, 'mouftz/failing-repo')
     assert.equal(typeof payload.providers.githubOauthConfigured, 'boolean')
     assert.equal(typeof payload.providers.giteaConfigured, 'boolean')
+    assert.equal(payload.providers.giteaConfigured, true)
   } finally {
     prisma.repo.findMany = originalRepoFindMany
+    prisma.user.findUnique = originalUserFindUnique
     await app.close()
   }
 })

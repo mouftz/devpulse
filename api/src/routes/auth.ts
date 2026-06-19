@@ -147,6 +147,8 @@ export async function authRoutes(app: FastifyInstance) {
           githubId: true,
           username: true,
           giteaUsername: true,
+          giteaBaseUrl: true,
+          giteaToken: true,
           email: true,
           avatarUrl: true,
           accessToken: true,
@@ -166,7 +168,8 @@ export async function authRoutes(app: FastifyInstance) {
           email: user.email,
           avatarUrl: user.avatarUrl,
           githubConnected: Boolean(user.accessToken),
-          giteaConnected: Boolean(user.giteaUsername),
+          giteaConnected: Boolean(user.giteaUsername && user.giteaBaseUrl && user.giteaToken),
+          giteaBaseUrl: user.giteaBaseUrl,
         },
       }
     } catch {
@@ -203,7 +206,7 @@ export async function authRoutes(app: FastifyInstance) {
       const payload = app.jwt.verify<{ sub: string }>(token)
       await prisma.user.update({
         where: { id: payload.sub },
-        data: { giteaUsername: null },
+        data: { giteaUsername: null, giteaBaseUrl: null, giteaToken: null },
       })
 
       return { provider: 'gitea', connected: false }
@@ -220,7 +223,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     try {
       const payload = app.jwt.verify<{ sub: string }>(token)
-      const [queueDepth, repoStates, recentFailures] = await Promise.all([
+      const [queueDepth, repoStates, recentFailures, user] = await Promise.all([
         getQueueDepth(),
         prisma.repo.findMany({
           where: { ownerId: payload.sub, isHidden: false },
@@ -236,6 +239,10 @@ export async function authRoutes(app: FastifyInstance) {
           select: { id: true, fullName: true, provider: true, lastSyncError: true, lastSyncFinishedAt: true },
           orderBy: { lastSyncFinishedAt: 'desc' },
           take: 5,
+        }),
+        prisma.user.findUnique({
+          where: { id: payload.sub },
+          select: { giteaBaseUrl: true, giteaToken: true },
         }),
       ])
 
@@ -268,7 +275,7 @@ export async function authRoutes(app: FastifyInstance) {
         },
         providers: {
           githubOauthConfigured: Boolean(process.env.GITHUB_CLIENT_ID && process.env.GITHUB_CLIENT_SECRET),
-          giteaConfigured: Boolean(process.env.GITEA_BASE_URL && process.env.GITEA_TOKEN),
+          giteaConfigured: Boolean(user?.giteaBaseUrl && user?.giteaToken),
         },
       }
     } catch {

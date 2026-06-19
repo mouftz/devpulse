@@ -116,7 +116,7 @@ Store these in Secret Manager and mount them as environment variables:
 - `ML_SERVICE_TOKEN`
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
-- `GITEA_TOKEN` when used
+- `TOKEN_ENCRYPTION_KEY` for encrypting user provider credentials
 
 The ML service accepts `/health` publicly for probes, but training and
 prediction endpoints require `X-ML-Service-Token` when configured.

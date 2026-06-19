@@ -47,7 +47,7 @@ const processJob = async (job: SyncJob) => {
     return
   }
 
-  await syncGiteaRepo({ id: repo.id, fullName: repo.fullName })
+  await syncGiteaRepo({ id: repo.id, fullName: repo.fullName, ownerId: repo.ownerId })
   log(`synced gitea repo ${repo.fullName}`)
 }
 

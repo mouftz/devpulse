@@ -218,7 +218,7 @@ export const syncGitHubRepo = async (
       const savedCommits = await Promise.all(
         commits.map((commit) =>
           tx.commit.upsert({
-            where: { sha: commit.sha },
+            where: { repoId_sha: { repoId: repo.id, sha: commit.sha } },
             create: {
               repoId: repo.id,
               sha: commit.sha,
@@ -416,7 +416,8 @@ export async function repoRoutes(app: FastifyInstance) {
       githubRepos.map((repo) =>
         prisma.repo.upsert({
           where: {
-            provider_providerRepoId: {
+            ownerId_provider_providerRepoId: {
+              ownerId: user.id,
               provider: 'github',
               providerRepoId: String(repo.id),
             },

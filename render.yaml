@@ -53,10 +53,6 @@ services:
         sync: false
       - key: FRONTEND_URL
         sync: false
-      - key: GITEA_BASE_URL
-        sync: false
-      - key: GITEA_TOKEN
-        sync: false
       - key: HOST
         value: 0.0.0.0
       - key: NODE_ENV

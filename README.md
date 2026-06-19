@@ -10,7 +10,7 @@ predictions with confidence ranges.
 The current version is focused on one clean loop:
 
 1. Connect GitHub with OAuth.
-2. Optionally layer in Gitea from the dashboard.
+2. Optionally connect any Gitea server from Settings.
 3. Discover repositories.
 4. Sync them in the background through Redis.
 5. Explore trends, forecasts, and recommended actions in the dashboard.
@@ -25,7 +25,7 @@ recommendation to the repository and evidence that produced it.
 ## What Works Today
 
 - GitHub OAuth sign-in with an HTTP-only session cookie
-- Optional Gitea repository discovery using `GITEA_BASE_URL` and `GITEA_TOKEN`
+- Per-user Gitea connections for any compatible server, with encrypted access-token storage
 - Background repo sync queue backed by Redis
 - Manual sync actions for all visible repos or a single repo
 - Nightly / catch-up sync worker flow
@@ -73,7 +73,7 @@ recommendation to the repository and evidence that produced it.
 ## Architecture
 
 ```text
-GitHub OAuth / Gitea token
+GitHub OAuth / per-user Gitea token
            |
            v
       Fastify API
@@ -151,9 +151,6 @@ JWT_SECRET=change_me_in_production
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
 GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
-
-GITEA_BASE_URL=
-GITEA_TOKEN=
 
 REDIS_URL=redis://localhost:6379
 ML_SERVICE_URL=http://localhost:8001
@@ -298,6 +295,7 @@ npm test
 | `/github/activity` | GET | Daily commit counts |
 | `/github/insights` | GET | High-level dashboard insights |
 | `/gitea/repos` | GET | Discover and save Gitea repos |
+| `/gitea/connect` | POST | Validate and securely save the current user's Gitea connection |
 | `/gitea/repos/sync-all/background` | POST | Queue all visible Gitea repos |
 | `/gitea/repos/:repoId/sync/background` | POST | Queue one Gitea repo |
 

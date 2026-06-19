@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import got from 'got'
+import { isIP } from 'node:net'
 import prisma from '../db.js'
 import { legacyRepoKey } from '../lib/provider-helpers.js'
 import {
@@ -12,6 +13,7 @@ import {
 import { normalizeSyncError } from '../lib/sync-errors.js'
 import { mapWithConcurrency } from '../lib/concurrency.js'
 import { predictRepoCycleTimes } from '../lib/ml-client.js'
+import { decryptToken, encryptToken } from '../lib/token-crypto.js'
 
 type AuthPayload = {
   sub: string
@@ -74,24 +76,45 @@ const getBearerToken = (request: FastifyRequest) => {
   return request.cookies.devpulse_token ?? null
 }
 
-const giteaApiUrl = () => {
-  const baseUrl = process.env.GITEA_BASE_URL
-  if (!baseUrl) {
-    throw new Error('GITEA_BASE_URL is required')
-  }
+type GiteaCredentials = { baseUrl: string; token: string }
 
-  return `${baseUrl.replace(/\/$/, '')}/api/v1`
+const isPrivateHost = (hostname: string) => {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (normalized === 'localhost' || normalized.endsWith('.localhost')) return true
+  if (!isIP(normalized)) return false
+  return normalized === '::1'
+    || normalized.startsWith('fc')
+    || normalized.startsWith('fd')
+    || normalized.startsWith('fe80:')
+    || normalized.startsWith('10.')
+    || normalized.startsWith('127.')
+    || normalized.startsWith('169.254.')
+    || normalized.startsWith('192.168.')
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(normalized)
 }
 
-const giteaHeaders = () => {
-  if (!process.env.GITEA_TOKEN) {
-    throw new Error('GITEA_TOKEN is required')
-  }
+const giteaRequestOptions = (credentials: GiteaCredentials) => ({
+  headers: giteaHeaders(credentials),
+  timeout: { request: 15_000 },
+})
 
-  return {
+const giteaApiUrl = (credentials: GiteaCredentials) =>
+  `${credentials.baseUrl.replace(/\/$/, '')}/api/v1`
+
+const giteaHeaders = (credentials: GiteaCredentials) => ({
     Accept: 'application/json',
-    Authorization: `token ${process.env.GITEA_TOKEN}`,
-  }
+    Authorization: `token ${credentials.token}`,
+  })
+
+const credentialsForUser = async (userId: string): Promise<GiteaCredentials> => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { giteaBaseUrl: true, giteaToken: true },
+  })
+  const baseUrl = user?.giteaBaseUrl ?? process.env.GITEA_BASE_URL
+  const token = user?.giteaToken ? decryptToken(user.giteaToken) : process.env.GITEA_TOKEN
+  if (!baseUrl || !token) throw new Error('Connect a Gitea account before syncing')
+  return { baseUrl, token }
 }
 
 const providerRepoId = (id: number) => String(id)
@@ -105,7 +128,7 @@ const giteaMergedAt = (pullRequest: GiteaPullRequest) => {
 
 const giteaState = (pullRequest: GiteaPullRequest) => (giteaMergedAt(pullRequest) ? 'merged' : pullRequest.state)
 
-const paginateGitea = async <T>(path: string, searchParams: Record<string, string> = {}) => {
+const paginateGitea = async <T>(credentials: GiteaCredentials, path: string, searchParams: Record<string, string> = {}) => {
   const results: T[] = []
   const limit = Number(searchParams.limit ?? '100')
 
@@ -116,7 +139,7 @@ const paginateGitea = async <T>(path: string, searchParams: Record<string, strin
         page: String(page),
         ...searchParams,
       },
-      headers: giteaHeaders(),
+      ...giteaRequestOptions(credentials),
     })
     const items = JSON.parse(String(response.body)) as T[]
 
@@ -127,7 +150,7 @@ const paginateGitea = async <T>(path: string, searchParams: Record<string, strin
   return results
 }
 
-export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
+export const syncGiteaRepo = async (repo: { id: string; fullName: string; ownerId: string }) => {
   await markRepoSyncStarted(repo.id)
   try {
     const [owner, name] = repo.fullName.split('/')
@@ -135,9 +158,10 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
       throw new Error(`Invalid Gitea repo name: ${repo.fullName}`)
     }
 
-    const apiUrl = giteaApiUrl()
-    const commits = await paginateGitea<GiteaCommit>(`${apiUrl}/repos/${owner}/${name}/commits`)
-    const pullRequests = await paginateGitea<GiteaPullRequest>(`${apiUrl}/repos/${owner}/${name}/pulls`, {
+    const credentials = await credentialsForUser(repo.ownerId)
+    const apiUrl = giteaApiUrl(credentials)
+    const commits = await paginateGitea<GiteaCommit>(credentials, `${apiUrl}/repos/${owner}/${name}/commits`)
+    const pullRequests = await paginateGitea<GiteaPullRequest>(credentials, `${apiUrl}/repos/${owner}/${name}/pulls`, {
       state: 'all',
     })
 
@@ -150,9 +174,9 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
       async (pullRequest) => {
         try {
           const [reviews, reviewComments, issueComments] = await Promise.all([
-            paginateGitea<GiteaReview>(`${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/reviews`),
-            paginateGitea<GiteaComment>(`${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/comments`),
-            paginateGitea<GiteaComment>(`${apiUrl}/repos/${owner}/${name}/issues/${pullRequest.number}/comments`),
+            paginateGitea<GiteaReview>(credentials, `${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/reviews`),
+            paginateGitea<GiteaComment>(credentials, `${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/comments`),
+            paginateGitea<GiteaComment>(credentials, `${apiUrl}/repos/${owner}/${name}/issues/${pullRequest.number}/comments`),
           ])
           reviewsByPr.set(pullRequest.number, reviews)
           reviewCommentsByPr.set(pullRequest.number, reviewComments)
@@ -169,7 +193,7 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string }) => {
       const savedCommits = await Promise.all(
         commits.map((commit) =>
           tx.commit.upsert({
-            where: { sha: providerCommitSha(repo.id, commit.sha) },
+            where: { repoId_sha: { repoId: repo.id, sha: providerCommitSha(repo.id, commit.sha) } },
             create: {
               repoId: repo.id,
               sha: providerCommitSha(repo.id, commit.sha),
@@ -323,7 +347,7 @@ export async function giteaRoutes(app: FastifyInstance) {
 
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true },
+      select: { id: true, giteaBaseUrl: true, giteaToken: true },
     })
 
     if (!user) {
@@ -334,15 +358,60 @@ export async function giteaRoutes(app: FastifyInstance) {
     return user
   }
 
+  app.post<{ Body: { baseUrl?: string; token?: string } }>('/connect', async (request, reply) => {
+    const user = await authenticate(request, reply)
+    if (!user) return
+
+    const rawBaseUrl = request.body?.baseUrl?.trim().replace(/\/$/, '')
+    const providerToken = request.body?.token?.trim()
+    if (!rawBaseUrl || !providerToken) {
+      return reply.code(400).send({ error: 'Gitea server URL and token are required' })
+    }
+
+    let parsedUrl: URL
+    try {
+      parsedUrl = new URL(rawBaseUrl)
+    } catch {
+      return reply.code(400).send({ error: 'Enter a valid Gitea server URL' })
+    }
+    if (!['https:', 'http:'].includes(parsedUrl.protocol)) {
+      return reply.code(400).send({ error: 'Gitea URL must use HTTP or HTTPS' })
+    }
+    if (isPrivateHost(parsedUrl.hostname)) {
+      return reply.code(400).send({ error: 'Gitea server must be reachable at a public hostname' })
+    }
+    if (process.env.NODE_ENV === 'production' && parsedUrl.protocol !== 'https:') {
+      return reply.code(400).send({ error: 'Production Gitea connections must use HTTPS' })
+    }
+
+    const credentials = { baseUrl: rawBaseUrl, token: providerToken }
+    try {
+      const providerUser = await got
+        .get(`${giteaApiUrl(credentials)}/user`, giteaRequestOptions(credentials))
+        .json<GiteaUser>()
+      const username = giteaIdentity(providerUser)
+      if (!username) throw new Error('Gitea did not return a username')
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { giteaBaseUrl: rawBaseUrl, giteaToken: encryptToken(providerToken), giteaUsername: username },
+      })
+      return { connected: true, username, baseUrl: rawBaseUrl }
+    } catch (error) {
+      return reply.code(400).send({ error: `Could not authenticate with Gitea: ${normalizeSyncError(error)}` })
+    }
+  })
+
   app.get('/repos', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
       return
     }
 
+    const credentials = await credentialsForUser(user.id)
     const giteaUser = await got
-      .get(`${giteaApiUrl()}/user`, {
-        headers: giteaHeaders(),
+      .get(`${giteaApiUrl(credentials)}/user`, {
+        ...giteaRequestOptions(credentials),
       })
       .json<GiteaUser>()
     const giteaUsername = giteaIdentity(giteaUser)
@@ -354,13 +423,14 @@ export async function giteaRoutes(app: FastifyInstance) {
       })
     }
 
-    const repos = await paginateGitea<GiteaRepo>(`${giteaApiUrl()}/user/repos`)
+    const repos = await paginateGitea<GiteaRepo>(credentials, `${giteaApiUrl(credentials)}/user/repos`)
 
     const savedRepos = await prisma.$transaction(
       repos.map((repo) =>
         prisma.repo.upsert({
           where: {
-            provider_providerRepoId: {
+            ownerId_provider_providerRepoId: {
+              ownerId: user.id,
               provider: 'gitea',
               providerRepoId: providerRepoId(repo.id),
             },
@@ -411,7 +481,7 @@ export async function giteaRoutes(app: FastifyInstance) {
         provider: 'gitea',
         isHidden: false,
       },
-      select: { id: true, fullName: true },
+      select: { id: true, fullName: true, ownerId: true },
       orderBy: { fullName: 'asc' },
     })
 
@@ -453,7 +523,7 @@ export async function giteaRoutes(app: FastifyInstance) {
         provider: 'gitea',
         isHidden: false,
       },
-      select: { id: true, fullName: true },
+      select: { id: true, fullName: true, ownerId: true },
     })
 
     if (!repo) {

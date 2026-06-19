@@ -16,6 +16,8 @@ model User {
   email        String   @unique
   username     String
   giteaUsername String? @map("gitea_username")
+  giteaBaseUrl String? @map("gitea_base_url")
+  giteaToken String? @map("gitea_token")
   avatarUrl    String?  @map("avatar_url")
   accessToken  String   @map("access_token")  // encrypt before storing
   createdAt    DateTime @default(now()) @map("created_at")
@@ -60,7 +62,7 @@ model TeamMember {
 // ── Repos ──────────────────────────────────────────────────────────────────────
 model Repo {
   id            String    @id @default(uuid())
-  githubRepoId  String    @unique @map("github_repo_id")
+  githubRepoId  String    @map("github_repo_id")
   provider      String    @default("github")
   providerRepoId String?  @map("provider_repo_id")
   ownerId       String    @map("owner_id")
@@ -81,7 +83,7 @@ model Repo {
   mlScores     MlScore[]
 
   @@unique([ownerId, provider, fullName])
-  @@unique([provider, providerRepoId])
+  @@unique([ownerId, provider, providerRepoId])
   @@map("repos")
 }
 
@@ -89,7 +91,7 @@ model Repo {
 model Commit {
   id             String   @id @default(uuid())
   repoId         String   @map("repo_id")
-  sha            String   @unique
+  sha            String
   authorGithubId String   @map("author_github_id")
   message        String
   additions      Int      @default(0)
@@ -97,6 +99,8 @@ model Commit {
   committedAt    DateTime @map("committed_at")
 
   repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([repoId, sha])
 
   // Index for time-range analytics queries
   @@index([repoId, committedAt])

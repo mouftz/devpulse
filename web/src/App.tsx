@@ -355,9 +355,11 @@ export function App() {
   const [teams, setTeams] = useState<TeamSummary[]>([])
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
   const [teamDashboard, setTeamDashboard] = useState<TeamDashboard | null>(null)
+  const [teamRepoIds, setTeamRepoIds] = useState<string[]>([])
   const [teamName, setTeamName] = useState('')
   const [teamMemberUsername, setTeamMemberUsername] = useState('')
   const [teamBusy, setTeamBusy] = useState(false)
+  const [teamFeedback, setTeamFeedback] = useState<NoticeState>(null)
   const [unlinkingProvider, setUnlinkingProvider] = useState<'github' | 'gitea' | null>(null)
   const [connectingProvider, setConnectingProvider] = useState<'gitea' | null>(null)
   const [giteaFormOpen, setGiteaFormOpen] = useState(false)
@@ -629,10 +631,13 @@ export function App() {
     const result = await api<TeamDashboard>(`/teams/${teamId}`)
     setSelectedTeamId(teamId)
     setTeamDashboard(result)
+    setTeamRepoIds(result.repositories.map((repo) => repo.id))
+    setTeamFeedback(null)
   }
 
   const openTeamPanel = async () => {
     setTeamPanelOpen(true)
+    setTeamFeedback(null)
     setTeamBusy(true)
     try {
       const result = await api<{ teams: TeamSummary[] }>('/teams')
@@ -640,7 +645,7 @@ export function App() {
       const teamId = selectedTeamId ?? result.teams[0]?.id
       if (teamId) await loadTeam(teamId)
     } catch (error) {
-      setNotice({ message: `Could not load teams: ${errorMessage(error)}`, tone: 'error' })
+      setTeamFeedback({ message: `Could not load teams: ${errorMessage(error)}`, tone: 'error' })
     } finally {
       setTeamBusy(false)
     }
@@ -656,21 +661,24 @@ export function App() {
       setTeams((current) => [...current, result.team])
       setTeamName('')
       await loadTeam(result.team.id)
+      setTeamFeedback({ message: `${result.team.name} was created.`, tone: 'success' })
     } catch (error) {
-      setNotice({ message: `Could not create team: ${errorMessage(error)}`, tone: 'error' })
+      setTeamFeedback({ message: `Could not create team: ${errorMessage(error)}`, tone: 'error' })
     } finally { setTeamBusy(false) }
   }
 
-  const saveTeamRepos = async (repoIds: string[]) => {
+  const saveTeamRepos = async () => {
     if (!selectedTeamId) return
     setTeamBusy(true)
+    setTeamFeedback(null)
     try {
       await api(`/teams/${selectedTeamId}/repos`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repoIds }),
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repoIds: teamRepoIds }),
       })
       await loadTeam(selectedTeamId)
+      setTeamFeedback({ message: 'Shared repositories updated.', tone: 'success' })
     } catch (error) {
-      setNotice({ message: `Could not update shared repos: ${errorMessage(error)}`, tone: 'error' })
+      setTeamFeedback({ message: `Could not update shared repos: ${errorMessage(error)}`, tone: 'error' })
     } finally { setTeamBusy(false) }
   }
 
@@ -683,8 +691,9 @@ export function App() {
       })
       setTeamMemberUsername('')
       await loadTeam(selectedTeamId)
+      setTeamFeedback({ message: 'Teammate added.', tone: 'success' })
     } catch (error) {
-      setNotice({ message: `Could not add member: ${errorMessage(error)}`, tone: 'error' })
+      setTeamFeedback({ message: `Could not add member: ${errorMessage(error)}`, tone: 'error' })
     } finally { setTeamBusy(false) }
   }
 
@@ -1645,6 +1654,7 @@ export function App() {
                 <button className="primary-button compact-button" onClick={() => void createTeam()} disabled={teamBusy || !teamName.trim()}>Create</button>
               </div>
             </div>
+            {teamFeedback ? <div className={`team-feedback ${teamFeedback.tone}`}>{teamFeedback.message}</div> : null}
             {teamDashboard ? (
               <>
                 <div className="team-metrics">
@@ -1656,12 +1666,24 @@ export function App() {
                 </div>
                 <div className="team-columns">
                   <section>
-                    <div className="team-section-heading"><div><p className="eyebrow">Repositories</p><h3>Explicitly shared with this team</h3></div></div>
+                    <div className="team-section-heading">
+                      <div><p className="eyebrow">Repositories</p><h3>Explicitly shared with this team</h3></div>
+                      {['owner', 'admin'].includes(teamDashboard.team.role) ? (
+                        <button
+                          className="primary-button compact-button"
+                          onClick={() => void saveTeamRepos()}
+                          disabled={teamBusy || teamRepoIds.length === teamDashboard.repositories.length && teamRepoIds.every((id) => teamDashboard.repositories.some((repo) => repo.id === id))}
+                        >
+                          {teamBusy ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}
+                          Save shared repos
+                        </button>
+                      ) : null}
+                    </div>
                     {['owner', 'admin'].includes(teamDashboard.team.role) ? (
                       <div className="team-repo-picker">
                         {(overview?.repos ?? []).map((repo) => {
-                          const checked = teamDashboard.repositories.some((shared) => shared.id === repo.id)
-                          return <label key={repo.id}><input type="checkbox" checked={checked} disabled={teamBusy} onChange={() => void saveTeamRepos(checked ? teamDashboard.repositories.filter((item) => item.id !== repo.id).map((item) => item.id) : [...teamDashboard.repositories.map((item) => item.id), repo.id])} /><span><strong>{repo.fullName}</strong><small>{repo.provider}</small></span></label>
+                          const checked = teamRepoIds.includes(repo.id)
+                          return <label key={repo.id} className={checked ? 'selected' : ''}><input type="checkbox" checked={checked} disabled={teamBusy} onChange={() => setTeamRepoIds((current) => checked ? current.filter((id) => id !== repo.id) : [...current, repo.id])} /><span><strong>{repo.fullName}</strong><small>{repo.provider}</small></span></label>
                         })}
                       </div>
                     ) : null}

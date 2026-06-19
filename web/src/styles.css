@@ -1997,6 +1997,27 @@ h2 {
   margin-bottom: 22px;
 }
 
+.team-feedback {
+  margin: -8px 0 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.team-feedback.success {
+  color: #baf5df;
+  border-color: rgba(126, 224, 194, 0.3);
+  background: rgba(126, 224, 194, 0.1);
+}
+
+.team-feedback.error {
+  color: #ffd2d8;
+  border-color: rgba(244, 113, 132, 0.34);
+  background: rgba(244, 113, 132, 0.1);
+}
+
 .team-columns {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.7fr);
@@ -2035,6 +2056,22 @@ h2 {
   border: 1px solid var(--line);
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.025);
+}
+
+.team-repo-picker label {
+  cursor: pointer;
+}
+
+.team-repo-picker label.selected {
+  border-color: rgba(126, 224, 194, 0.38);
+  background: rgba(126, 224, 194, 0.1);
+}
+
+.team-repo-picker input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: #7ee0c2;
 }
 
 .team-repo-picker span,

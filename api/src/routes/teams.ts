@@ -78,7 +78,7 @@ export async function teamRoutes(app: FastifyInstance) {
     const [mergedPullRequests, reviews] = repoIds.length
       ? await Promise.all([
           prisma.pullRequest.count({ where: { repoId: { in: repoIds }, mergedAt: { not: null } } }),
-          prisma.prReview.count({ where: { pr: { repoId: { in: repoIds } } } }),
+          prisma.prReview.count({ where: { pullRequest: { repoId: { in: repoIds } } } }),
         ])
       : [0, 0]
     return {

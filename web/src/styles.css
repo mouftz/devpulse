@@ -1941,6 +1941,125 @@ h2 {
   gap: 10px;
 }
 
+.team-panel {
+  width: min(1120px, calc(100vw - 32px));
+  max-height: min(820px, calc(100vh - 48px));
+  overflow-y: auto;
+  padding: 28px;
+}
+
+.team-toolbar,
+.team-inline-form,
+.team-tabs,
+.team-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.team-toolbar {
+  justify-content: space-between;
+  margin: 20px 0;
+}
+
+.team-tabs {
+  flex-wrap: wrap;
+}
+
+.team-tabs button {
+  padding: 9px 13px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.team-tabs button.active {
+  color: var(--text);
+  border-color: rgba(126, 224, 194, 0.36);
+  background: rgba(126, 224, 194, 0.14);
+}
+
+.team-inline-form input {
+  min-width: 190px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: rgba(9, 15, 24, 0.55);
+  font: inherit;
+}
+
+.team-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.team-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(280px, 0.7fr);
+  gap: 22px;
+}
+
+.team-columns > section {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.team-section-heading {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.team-section-heading h3 {
+  margin: 4px 0 0;
+}
+
+.team-repo-picker,
+.team-member-list {
+  display: grid;
+  gap: 8px;
+}
+
+.team-repo-picker label,
+.team-member-list > div {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.team-repo-picker span,
+.team-repo-picker small,
+.team-member-list span,
+.team-member-list small {
+  display: block;
+}
+
+.team-repo-picker small,
+.team-member-list small {
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.team-member-list {
+  margin-top: 14px;
+}
+
+.team-member-list img {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+}
+
 .settings-system-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2341,6 +2460,22 @@ h2 {
     grid-column: auto;
     display: grid;
     grid-template-columns: 1fr 1fr;
+  }
+
+  .team-toolbar,
+  .team-inline-form {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .team-inline-form input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .team-metrics,
+  .team-columns {
+    grid-template-columns: 1fr;
   }
 
   .topbar,

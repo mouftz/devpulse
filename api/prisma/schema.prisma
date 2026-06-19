@@ -41,6 +41,7 @@ model Team {
 
   owner   User         @relation("TeamOwner", fields: [ownerId], references: [id])
   members TeamMember[]
+  repos   TeamRepo[]
 
   @@map("teams")
 }
@@ -57,6 +58,18 @@ model TeamMember {
 
   @@unique([teamId, userId])
   @@map("team_members")
+}
+
+model TeamRepo {
+  id      String @id @default(uuid())
+  teamId  String @map("team_id")
+  repoId  String @map("repo_id")
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  repo Repo @relation(fields: [repoId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, repoId])
+  @@map("team_repos")
 }
 
 // ── Repos ──────────────────────────────────────────────────────────────────────
@@ -81,6 +94,7 @@ model Repo {
   commits      Commit[]
   pullRequests PullRequest[]
   mlScores     MlScore[]
+  teams        TeamRepo[]
 
   @@unique([ownerId, provider, fullName])
   @@unique([ownerId, provider, providerRepoId])

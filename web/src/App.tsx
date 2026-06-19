@@ -18,6 +18,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
+  Users,
   X,
 } from 'lucide-react'
 import { AuthLanding } from './components/AuthLanding'
@@ -69,6 +70,14 @@ type Overview = {
 
 type ManagerRepo = Overview['repos'][number] & {
   isHidden: boolean
+}
+
+type TeamSummary = { id: string; name: string; slug: string; role: string; members: number; repositories: number }
+type TeamDashboard = {
+  team: { id: string; name: string; slug: string; role: string }
+  totals: { repositories: number; commits: number; pullRequests: number; mergedPullRequests: number; reviews: number }
+  repositories: Array<{ id: string; provider: string; fullName: string; commits: number; pullRequests: number; lastSyncedAt: string | null }>
+  members: Array<{ id: string; username: string; avatarUrl: string | null; role: string }>
 }
 
 type ActivityDay = {
@@ -342,6 +351,13 @@ export function App() {
   const [managerVisibilityFilter, setManagerVisibilityFilter] = useState<'all' | 'visible' | 'hidden'>('all')
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [teamPanelOpen, setTeamPanelOpen] = useState(false)
+  const [teams, setTeams] = useState<TeamSummary[]>([])
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
+  const [teamDashboard, setTeamDashboard] = useState<TeamDashboard | null>(null)
+  const [teamName, setTeamName] = useState('')
+  const [teamMemberUsername, setTeamMemberUsername] = useState('')
+  const [teamBusy, setTeamBusy] = useState(false)
   const [unlinkingProvider, setUnlinkingProvider] = useState<'github' | 'gitea' | null>(null)
   const [connectingProvider, setConnectingProvider] = useState<'gitea' | null>(null)
   const [giteaFormOpen, setGiteaFormOpen] = useState(false)
@@ -609,6 +625,69 @@ export function App() {
     void loadSystemStatus()
   }
 
+  const loadTeam = async (teamId: string) => {
+    const result = await api<TeamDashboard>(`/teams/${teamId}`)
+    setSelectedTeamId(teamId)
+    setTeamDashboard(result)
+  }
+
+  const openTeamPanel = async () => {
+    setTeamPanelOpen(true)
+    setTeamBusy(true)
+    try {
+      const result = await api<{ teams: TeamSummary[] }>('/teams')
+      setTeams(result.teams)
+      const teamId = selectedTeamId ?? result.teams[0]?.id
+      if (teamId) await loadTeam(teamId)
+    } catch (error) {
+      setNotice({ message: `Could not load teams: ${errorMessage(error)}`, tone: 'error' })
+    } finally {
+      setTeamBusy(false)
+    }
+  }
+
+  const createTeam = async () => {
+    if (!teamName.trim()) return
+    setTeamBusy(true)
+    try {
+      const result = await api<{ team: TeamSummary }>('/teams', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: teamName }),
+      })
+      setTeams((current) => [...current, result.team])
+      setTeamName('')
+      await loadTeam(result.team.id)
+    } catch (error) {
+      setNotice({ message: `Could not create team: ${errorMessage(error)}`, tone: 'error' })
+    } finally { setTeamBusy(false) }
+  }
+
+  const saveTeamRepos = async (repoIds: string[]) => {
+    if (!selectedTeamId) return
+    setTeamBusy(true)
+    try {
+      await api(`/teams/${selectedTeamId}/repos`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repoIds }),
+      })
+      await loadTeam(selectedTeamId)
+    } catch (error) {
+      setNotice({ message: `Could not update shared repos: ${errorMessage(error)}`, tone: 'error' })
+    } finally { setTeamBusy(false) }
+  }
+
+  const addTeamMember = async () => {
+    if (!selectedTeamId || !teamMemberUsername.trim()) return
+    setTeamBusy(true)
+    try {
+      await api(`/teams/${selectedTeamId}/members`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: teamMemberUsername }),
+      })
+      setTeamMemberUsername('')
+      await loadTeam(selectedTeamId)
+    } catch (error) {
+      setNotice({ message: `Could not add member: ${errorMessage(error)}`, tone: 'error' })
+    } finally { setTeamBusy(false) }
+  }
+
   const closeSettings = () => {
     setSettingsOpen(false)
     setGiteaFormOpen(false)
@@ -842,6 +921,10 @@ export function App() {
               <button className="secondary-button" onClick={openManager}>
                 <Settings2 size={18} />
                 Manage Repos
+              </button>
+              <button className="secondary-button" onClick={() => void openTeamPanel()}>
+                <Users size={18} />
+                Team Panel
               </button>
               <button className="secondary-button" onClick={load}>
                 <RefreshCw size={18} />
@@ -1542,6 +1625,55 @@ export function App() {
                 Log out
               </button>
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {teamPanelOpen && user ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={() => setTeamPanelOpen(false)}>
+          <section className="glass-panel team-panel" role="dialog" aria-modal="true" aria-label="Team workspace" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="section-title">
+              <div><p className="eyebrow">Supervisor Workspace</p><h2>Shared repository performance</h2></div>
+              <button className="icon-button" onClick={() => setTeamPanelOpen(false)} title="Close team panel"><X size={18} /></button>
+            </div>
+            <div className="team-toolbar">
+              <div className="team-tabs">
+                {teams.map((team) => <button className={selectedTeamId === team.id ? 'active' : ''} key={team.id} onClick={() => void loadTeam(team.id)}>{team.name}</button>)}
+              </div>
+              <div className="team-inline-form">
+                <input value={teamName} onChange={(event) => setTeamName(event.target.value)} placeholder="New team name" />
+                <button className="primary-button compact-button" onClick={() => void createTeam()} disabled={teamBusy || !teamName.trim()}>Create</button>
+              </div>
+            </div>
+            {teamDashboard ? (
+              <>
+                <div className="team-metrics">
+                  <StatPill label="Shared repos" value={String(teamDashboard.totals.repositories)} />
+                  <StatPill label="Commits" value={String(teamDashboard.totals.commits)} />
+                  <StatPill label="Pull requests" value={String(teamDashboard.totals.pullRequests)} />
+                  <StatPill label="Merged PRs" value={String(teamDashboard.totals.mergedPullRequests)} />
+                  <StatPill label="Reviews" value={String(teamDashboard.totals.reviews)} />
+                </div>
+                <div className="team-columns">
+                  <section>
+                    <div className="team-section-heading"><div><p className="eyebrow">Repositories</p><h3>Explicitly shared with this team</h3></div></div>
+                    {['owner', 'admin'].includes(teamDashboard.team.role) ? (
+                      <div className="team-repo-picker">
+                        {(overview?.repos ?? []).map((repo) => {
+                          const checked = teamDashboard.repositories.some((shared) => shared.id === repo.id)
+                          return <label key={repo.id}><input type="checkbox" checked={checked} disabled={teamBusy} onChange={() => void saveTeamRepos(checked ? teamDashboard.repositories.filter((item) => item.id !== repo.id).map((item) => item.id) : [...teamDashboard.repositories.map((item) => item.id), repo.id])} /><span><strong>{repo.fullName}</strong><small>{repo.provider}</small></span></label>
+                        })}
+                      </div>
+                    ) : null}
+                  </section>
+                  <section>
+                    <div className="team-section-heading"><div><p className="eyebrow">Members</p><h3>{teamDashboard.members.length} teammates</h3></div></div>
+                    {['owner', 'admin'].includes(teamDashboard.team.role) ? <div className="team-inline-form"><input value={teamMemberUsername} onChange={(event) => setTeamMemberUsername(event.target.value)} placeholder="GitHub username" /><button className="secondary-button compact-button" onClick={() => void addTeamMember()} disabled={teamBusy || !teamMemberUsername.trim()}>Add</button></div> : null}
+                    <div className="team-member-list">{teamDashboard.members.map((member) => <div key={member.id}>{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : <Users size={18} />}<span><strong>{member.username}</strong><small>{member.role}</small></span></div>)}</div>
+                  </section>
+                </div>
+              </>
+            ) : <div className="empty-state">Create a team to choose shared repositories and invite teammates.</div>}
           </section>
         </div>
       ) : null}

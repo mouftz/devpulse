@@ -5,6 +5,7 @@ import jwt from '@fastify/jwt'
 import { authRoutes } from './routes/auth.js'
 import { giteaRoutes } from './routes/gitea.js'
 import { repoRoutes } from './routes/repos.js'
+import { teamRoutes } from './routes/teams.js'
 
 export const createApp = () => {
   const isProduction = process.env.NODE_ENV === 'production'
@@ -25,6 +26,7 @@ export const createApp = () => {
   app.register(authRoutes, { prefix: '/auth' })
   app.register(repoRoutes, { prefix: '/github' })
   app.register(giteaRoutes, { prefix: '/gitea' })
+  app.register(teamRoutes, { prefix: '/teams' })
 
   app.get('/health', async () => ({ status: 'ok' }))
 

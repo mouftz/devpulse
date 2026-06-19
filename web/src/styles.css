@@ -1836,10 +1836,7 @@ h2 {
 }
 
 .repo-manager {
-  display: flex;
-  flex-direction: column;
   width: min(920px, 100%);
-  height: min(760px, calc(100dvh - 44px));
   max-height: min(760px, calc(100vh - 44px));
   padding: 22px;
   overflow: hidden;
@@ -2117,13 +2114,10 @@ h2 {
 
 .manager-list {
   display: grid;
-  flex: 1 1 auto;
   gap: 8px;
-  min-height: 0;
-  max-height: none;
+  max-height: min(500px, calc(100vh - 288px));
   overflow: auto;
-  padding: 0 6px 12px 0;
-  scroll-padding-bottom: 12px;
+  padding-right: 6px;
   scrollbar-color: rgba(126, 224, 192, 0.34) rgba(255, 255, 255, 0.055);
   scrollbar-width: thin;
 }

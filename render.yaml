@@ -23,7 +23,6 @@ services:
     dockerfilePath: ./api/Dockerfile
     dockerContext: ./api
     healthCheckPath: /health
-    dockerCommand: sh -c "npx prisma migrate deploy && node dist/index.js"
     envVars:
       - key: DATABASE_URL
         sync: false

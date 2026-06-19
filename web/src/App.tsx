@@ -359,7 +359,7 @@ export function App() {
   const [managerVisibilityFilter, setManagerVisibilityFilter] = useState<'all' | 'visible' | 'hidden'>('all')
   const [accountMenuOpen, setAccountMenuOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [teamPanelOpen, setTeamPanelOpen] = useState(false)
+  const [teamPanelOpen, setTeamPanelOpen] = useState(() => window.location.pathname === '/team')
   const [teams, setTeams] = useState<TeamSummary[]>([])
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
   const [teamDashboard, setTeamDashboard] = useState<TeamDashboard | null>(null)
@@ -370,6 +370,7 @@ export function App() {
   const [teamName, setTeamName] = useState('')
   const [teamMemberUsername, setTeamMemberUsername] = useState('')
   const [teamBusy, setTeamBusy] = useState(false)
+  const [teamPageInitialized, setTeamPageInitialized] = useState(false)
   const [teamFeedback, setTeamFeedback] = useState<NoticeState>(null)
   const [teamDeleteOpen, setTeamDeleteOpen] = useState(false)
   const [teamDeleteConfirmation, setTeamDeleteConfirmation] = useState('')
@@ -661,6 +662,7 @@ export function App() {
 
   const openTeamPanel = async () => {
     setTeamPanelOpen(true)
+    setTeamPageInitialized(true)
     window.history.pushState({ view: 'team' }, '', '/team')
     setTeamFeedback(null)
     setTeamBusy(true)
@@ -678,8 +680,28 @@ export function App() {
 
   const closeTeamWorkspace = () => {
     setTeamPanelOpen(false)
+    setTeamPageInitialized(false)
     window.history.pushState({ view: 'dashboard' }, '', '/')
   }
+
+  useEffect(() => {
+    const handleNavigation = () => setTeamPanelOpen(window.location.pathname === '/team')
+    window.addEventListener('popstate', handleNavigation)
+    return () => window.removeEventListener('popstate', handleNavigation)
+  }, [])
+
+  useEffect(() => {
+    if (!user || !teamPanelOpen || teamPageInitialized) return
+    setTeamPageInitialized(true)
+    setTeamBusy(true)
+    void api<{ teams: TeamSummary[] }>('/teams')
+      .then(async (result) => {
+        setTeams(result.teams)
+        if (result.teams[0]) await loadTeam(result.teams[0].id)
+      })
+      .catch((error) => setTeamFeedback({ message: `Could not load teams: ${errorMessage(error)}`, tone: 'error' }))
+      .finally(() => setTeamBusy(false))
+  }, [teamPageInitialized, teamPanelOpen, user])
 
   const createTeam = async () => {
     if (!teamName.trim()) return

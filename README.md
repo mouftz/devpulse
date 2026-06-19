@@ -334,25 +334,6 @@ cd web && npm test
 cd ml-service && python -m unittest discover -s tests
 ```
 
-## Production
-
-For a no-payment portfolio deployment, `render.yaml` provisions free Render
-web/static services while Neon Free hosts PostgreSQL and Upstash Free hosts
-Redis. The queue worker runs in the API process to avoid a paid worker service.
-See [docs/production.md](docs/production.md) for setup steps and free-tier
-limitations.
-
-For a complete always-on single-host deployment, `docker-compose.prod.yml`
-runs migrations before starting immutable API, worker, ML, and frontend containers:
-
-```bash
-cp .env.production.example .env.production
-docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
-```
-
-See [docs/production.md](docs/production.md) for Cloud Run, Cloud SQL,
-Memorystore, Secret Manager, and Workload Identity Federation guidance.
-
 ## Notes
 
 - The frontend uses `VITE_API_URL`, defaulting to `http://localhost:3000`.
@@ -360,10 +341,3 @@ Memorystore, Secret Manager, and Workload Identity Federation guidance.
   access tokens. Existing plaintext local tokens remain readable for migration.
 - Generate a token key with `openssl rand -base64 32`.
 - `.DS_Store` is ignored and should stay untracked.
-
-## Current Scope
-
-DevPulse is an active portfolio project. Local development, Docker orchestration,
-background ingestion, analytics, recommendation workflows, and ML inference are
-implemented. Cloud deployment is intentionally paused; the production Compose
-file and deployment guide remain as a starting point for future hosting work.

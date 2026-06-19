@@ -123,7 +123,7 @@ export async function authRoutes(app: FastifyInstance) {
     reply.setCookie('devpulse_token', token, {
       httpOnly: true,
       path: '/',
-      sameSite: 'lax',
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
       secure: process.env.NODE_ENV === 'production',
     })
 

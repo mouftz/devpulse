@@ -2,28 +2,45 @@
 
 DevPulse has two supported production shapes.
 
-## Vercel + Render
+## Free Portfolio Deployment
 
-This is the recommended managed deployment:
+The zero-cost deployment uses:
 
-- Vercel serves the Vite frontend from the `web` root directory.
-- Render provisions the API, queue worker, private ML service, Postgres, and
-  Redis from `render.yaml`.
+- Render Static Sites for the React frontend
+- Render Free Web Services for the API and ML service
+- Neon Free for PostgreSQL
+- Upstash Free for Redis
 
-1. Push the repository, then create a Render Blueprint from `render.yaml`.
-2. Supply the prompted GitHub OAuth and optional Gitea values. Initially set
-   `FRONTEND_URL` to the future Vercel URL and set `GITHUB_CALLBACK_URL` to
-   `https://devpulse-api.onrender.com/auth/github/callback`.
-3. In Vercel, import this repository, choose `web` as the root directory, and
-   add `VITE_API_URL=https://devpulse-api.onrender.com`.
-4. Deploy Vercel, then replace `FRONTEND_URL` in Render with the actual Vercel
-   production URL.
-5. Add the production callback URL to the GitHub OAuth application's callback
-   URL list.
+1. Create a Neon Free project and copy its pooled PostgreSQL connection string.
+2. Create an Upstash Redis Free database and copy its TLS `rediss://` URL.
+3. Push the repository, then create a Render Blueprint from `render.yaml`.
+4. Supply the prompted database, Redis, OAuth, service, and frontend values.
+5. After Render assigns URLs, set the values below and redeploy the affected services.
+6. Add the production callback URL to the GitHub OAuth application's callback URL.
 
-The Blueprint uses free Postgres, Redis, and API plans where available. The
-always-on queue worker and private model service use Render Starter instances,
-and therefore require billing. Model artifacts live on the ML service disk.
+| Variable | Service | Value |
+| --- | --- | --- |
+| `DATABASE_URL` | API + ML | Neon pooled connection string |
+| `REDIS_URL` | API | Upstash `rediss://` connection string |
+| `ML_SERVICE_URL` | API | `https://devpulse-ml.onrender.com` (use the actual assigned URL) |
+| `VITE_API_URL` | Web | `https://devpulse-api.onrender.com` (use the actual assigned URL) |
+| `FRONTEND_URL` | API | The assigned `devpulse-web` URL |
+| `GITHUB_CALLBACK_URL` | API | The API URL plus `/auth/github/callback` |
+
+The worker runs inside the API process on this free deployment. It processes
+queued syncs while the API is awake and performs catch-up scheduling whenever
+the service starts. This avoids a paid background-worker instance.
+
+### Free-tier tradeoffs
+
+- Render Free web services sleep after 15 minutes without inbound traffic and
+  can take about a minute to wake.
+- Render provides 750 shared Free instance hours per workspace each month.
+- The ML model artifact is ephemeral and retrains after the ML service restarts.
+- Neon Free currently includes 0.5 GB storage and 100 CU-hours per project each month.
+- Upstash Free currently includes 256 MB and 500,000 commands each month.
+- If a free quota is exhausted and no payment method is attached, the service
+  pauses instead of charging you.
 
 ## Single-host Docker Compose
 

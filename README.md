@@ -332,8 +332,14 @@ cd ml-service && python -m unittest discover -s tests
 
 ## Production
 
-Use `docker-compose.prod.yml` for a single-host deployment. It runs migrations
-before starting immutable API, worker, ML, and frontend containers:
+For a no-payment portfolio deployment, `render.yaml` provisions free Render
+web/static services while Neon Free hosts PostgreSQL and Upstash Free hosts
+Redis. The queue worker runs in the API process to avoid a paid worker service.
+See [docs/production.md](docs/production.md) for setup steps and free-tier
+limitations.
+
+For a complete always-on single-host deployment, `docker-compose.prod.yml`
+runs migrations before starting immutable API, worker, ML, and frontend containers:
 
 ```bash
 cp .env.production.example .env.production

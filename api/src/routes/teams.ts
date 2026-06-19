@@ -149,4 +149,19 @@ export async function teamRoutes(app: FastifyInstance) {
     })
     return reply.code(201).send({ member: { userId: member.userId, role: member.role } })
   })
+
+  app.delete<{ Params: { teamId: string }; Body: { confirmation?: string } }>('/:teamId', async (request, reply) => {
+    const userId = await authenticate(app, request, reply)
+    if (typeof userId !== 'string') return
+    const team = await prisma.team.findUnique({
+      where: { id: request.params.teamId },
+      select: { id: true, ownerId: true },
+    })
+    if (!team || team.ownerId !== userId) return reply.code(403).send({ error: 'Only the team owner can delete this team' })
+    if (request.body?.confirmation !== 'delete team') {
+      return reply.code(400).send({ error: 'Type "delete team" to confirm' })
+    }
+    await prisma.team.delete({ where: { id: team.id } })
+    return reply.code(204).send()
+  })
 }

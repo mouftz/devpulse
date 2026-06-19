@@ -360,6 +360,8 @@ export function App() {
   const [teamMemberUsername, setTeamMemberUsername] = useState('')
   const [teamBusy, setTeamBusy] = useState(false)
   const [teamFeedback, setTeamFeedback] = useState<NoticeState>(null)
+  const [teamDeleteOpen, setTeamDeleteOpen] = useState(false)
+  const [teamDeleteConfirmation, setTeamDeleteConfirmation] = useState('')
   const [unlinkingProvider, setUnlinkingProvider] = useState<'github' | 'gitea' | null>(null)
   const [connectingProvider, setConnectingProvider] = useState<'gitea' | null>(null)
   const [giteaFormOpen, setGiteaFormOpen] = useState(false)
@@ -633,6 +635,8 @@ export function App() {
     setTeamDashboard(result)
     setTeamRepoIds(result.repositories.map((repo) => repo.id))
     setTeamFeedback(null)
+    setTeamDeleteOpen(false)
+    setTeamDeleteConfirmation('')
   }
 
   const openTeamPanel = async () => {
@@ -694,6 +698,35 @@ export function App() {
       setTeamFeedback({ message: 'Teammate added.', tone: 'success' })
     } catch (error) {
       setTeamFeedback({ message: `Could not add member: ${errorMessage(error)}`, tone: 'error' })
+    } finally { setTeamBusy(false) }
+  }
+
+  const deleteTeam = async () => {
+    if (!selectedTeamId || teamDeleteConfirmation !== 'delete team') return
+    setTeamBusy(true)
+    setTeamFeedback(null)
+    try {
+      await api(`/teams/${selectedTeamId}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirmation: teamDeleteConfirmation }),
+      })
+      const result = await api<{ teams: TeamSummary[] }>('/teams')
+      setTeams(result.teams)
+      setTeamDeleteOpen(false)
+      setTeamDeleteConfirmation('')
+      const nextTeam = result.teams[0]
+      if (nextTeam) {
+        await loadTeam(nextTeam.id)
+        setTeamFeedback({ message: 'Team deleted.', tone: 'success' })
+      } else {
+        setSelectedTeamId(null)
+        setTeamDashboard(null)
+        setTeamRepoIds([])
+        setTeamFeedback({ message: 'Team deleted.', tone: 'success' })
+      }
+    } catch (error) {
+      setTeamFeedback({ message: `Could not delete team: ${errorMessage(error)}`, tone: 'error' })
     } finally { setTeamBusy(false) }
   }
 
@@ -1694,6 +1727,40 @@ export function App() {
                     <div className="team-member-list">{teamDashboard.members.map((member) => <div key={member.id}>{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : <Users size={18} />}<span><strong>{member.username}</strong><small>{member.role} · {member.commits} commits · {member.pullRequests} PRs in shared repos</small></span></div>)}</div>
                   </section>
                 </div>
+                {teamDashboard.team.role === 'owner' ? (
+                  <div className="team-danger-zone">
+                    <div>
+                      <p className="eyebrow">Danger zone</p>
+                      <h3>Delete this team</h3>
+                      <span>This removes the workspace, memberships, and shared-repository links. Repository data stays in DevPulse.</span>
+                    </div>
+                    {teamDeleteOpen ? (
+                      <div className="team-delete-confirmation">
+                        <label>
+                          <span>Type <strong>delete team</strong> to confirm</span>
+                          <input
+                            value={teamDeleteConfirmation}
+                            onChange={(event) => setTeamDeleteConfirmation(event.target.value)}
+                            placeholder="delete team"
+                            autoComplete="off"
+                          />
+                        </label>
+                        <div>
+                          <button className="secondary-button compact-button" onClick={() => { setTeamDeleteOpen(false); setTeamDeleteConfirmation('') }} disabled={teamBusy}>Cancel</button>
+                          <button className="danger-button compact-button" onClick={() => void deleteTeam()} disabled={teamBusy || teamDeleteConfirmation !== 'delete team'}>
+                            {teamBusy ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                            Delete team
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button className="danger-button compact-button" onClick={() => setTeamDeleteOpen(true)}>
+                        <Trash2 size={16} />
+                        Delete team
+                      </button>
+                    )}
+                  </div>
+                ) : null}
               </>
             ) : <div className="empty-state">Create a team to choose shared repositories and invite teammates.</div>}
           </section>

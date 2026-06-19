@@ -58,7 +58,7 @@ export async function teamRoutes(app: FastifyInstance) {
     return reply.code(201).send({ team: { ...team, role: 'owner', members: 1, repositories: 0 } })
   })
 
-  app.get<{ Params: { teamId: string } }>('/:teamId', async (request, reply) => {
+  app.get<{ Params: { teamId: string }; Querystring: { days?: string; repoId?: string; memberId?: string } }>('/:teamId', async (request, reply) => {
     const userId = await authenticate(app, request, reply)
     if (typeof userId !== 'string') return
     const membership = await prisma.teamMember.findUnique({
@@ -75,6 +75,32 @@ export async function teamRoutes(app: FastifyInstance) {
     if (!membership) return reply.code(404).send({ error: 'Team not found' })
     const repos = membership.team.repos.map(({ repo }) => repo)
     const repoIds = repos.map((repo) => repo.id)
+    const requestedRepoId = request.query.repoId
+    const filteredRepoIds = requestedRepoId && repoIds.includes(requestedRepoId) ? [requestedRepoId] : repoIds
+    const requestedDays = Number(request.query.days ?? 90)
+    const days = Number.isFinite(requestedDays) && requestedDays > 0 ? Math.min(requestedDays, 3650) : null
+    const cutoff = days ? new Date(Date.now() - days * 86_400_000) : null
+    const selectedMember = request.query.memberId
+      ? membership.team.members.find((member) => member.user.id === request.query.memberId)
+      : null
+    const selectedIdentities = selectedMember
+      ? [selectedMember.user.username, selectedMember.user.giteaUsername].filter((value): value is string => Boolean(value))
+      : []
+    const commitWhere = {
+      repoId: { in: filteredRepoIds },
+      ...(cutoff ? { committedAt: { gte: cutoff } } : {}),
+      ...(selectedIdentities.length ? { authorGithubId: { in: selectedIdentities, mode: 'insensitive' as const } } : {}),
+    }
+    const pullRequestWhere = {
+      repoId: { in: filteredRepoIds },
+      ...(cutoff ? { openedAt: { gte: cutoff } } : {}),
+      ...(selectedIdentities.length ? { authorGithubId: { in: selectedIdentities, mode: 'insensitive' as const } } : {}),
+    }
+    const reviewWhere = {
+      pullRequest: { repoId: { in: filteredRepoIds } },
+      ...(cutoff ? { submittedAt: { gte: cutoff } } : {}),
+      ...(selectedIdentities.length ? { reviewerGithubId: { in: selectedIdentities, mode: 'insensitive' as const } } : {}),
+    }
     const [mergedPullRequests, reviews, commitAuthors, pullRequestAuthors] = repoIds.length
       ? await Promise.all([
           prisma.pullRequest.count({ where: { repoId: { in: repoIds }, mergedAt: { not: null } } }),
@@ -83,6 +109,23 @@ export async function teamRoutes(app: FastifyInstance) {
           prisma.pullRequest.groupBy({ by: ['authorGithubId'], where: { repoId: { in: repoIds } }, _count: { _all: true } }),
         ])
       : [0, 0, [], []]
+    const [filteredCommits, filteredPullRequests, filteredReviews] = filteredRepoIds.length
+      ? await Promise.all([
+          prisma.commit.findMany({ where: commitWhere, select: { committedAt: true } }),
+          prisma.pullRequest.findMany({ where: pullRequestWhere, select: { openedAt: true, mergedAt: true } }),
+          prisma.prReview.findMany({ where: reviewWhere, select: { submittedAt: true } }),
+        ])
+      : [[], [], []]
+    const activity = new Map<string, { date: string; commits: number; pullRequests: number; reviews: number }>()
+    const bucket = (date: Date) => {
+      const key = date.toISOString().slice(0, 10)
+      const current = activity.get(key) ?? { date: key, commits: 0, pullRequests: 0, reviews: 0 }
+      activity.set(key, current)
+      return current
+    }
+    filteredCommits.forEach(({ committedAt }) => { bucket(committedAt).commits += 1 })
+    filteredPullRequests.forEach(({ openedAt }) => { bucket(openedAt).pullRequests += 1 })
+    filteredReviews.forEach(({ submittedAt }) => { bucket(submittedAt).reviews += 1 })
     const authorCount = (rows: Array<{ authorGithubId: string; _count: { _all: number } }>, identities: string[]) =>
       rows.filter((row) => identities.some((identity) => identity.toLowerCase() === row.authorGithubId.toLowerCase()))
         .reduce((sum, row) => sum + row._count._all, 0)
@@ -94,6 +137,19 @@ export async function teamRoutes(app: FastifyInstance) {
         pullRequests: repos.reduce((sum, repo) => sum + repo._count.pullRequests, 0),
         mergedPullRequests,
         reviews,
+      },
+      analytics: {
+        days,
+        repoId: requestedRepoId ?? null,
+        memberId: selectedMember?.user.id ?? null,
+        totals: {
+          repositories: filteredRepoIds.length,
+          commits: filteredCommits.length,
+          pullRequests: filteredPullRequests.length,
+          mergedPullRequests: filteredPullRequests.filter((pullRequest) => pullRequest.mergedAt).length,
+          reviews: filteredReviews.length,
+        },
+        activity: [...activity.values()].sort((a, b) => a.date.localeCompare(b.date)),
       },
       repositories: repos.map((repo) => ({
         id: repo.id,

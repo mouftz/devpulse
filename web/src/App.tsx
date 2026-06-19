@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
+  ArrowLeft,
   BrainCircuit,
   CheckCircle2,
   Clock3,
@@ -78,6 +79,13 @@ type TeamDashboard = {
   totals: { repositories: number; commits: number; pullRequests: number; mergedPullRequests: number; reviews: number }
   repositories: Array<{ id: string; provider: string; fullName: string; commits: number; pullRequests: number; lastSyncedAt: string | null }>
   members: Array<{ id: string; username: string; avatarUrl: string | null; role: string; commits: number; pullRequests: number }>
+  analytics: {
+    days: number | null
+    repoId: string | null
+    memberId: string | null
+    totals: { repositories: number; commits: number; pullRequests: number; mergedPullRequests: number; reviews: number }
+    activity: Array<{ date: string; commits: number; pullRequests: number; reviews: number }>
+  }
 }
 
 type ActivityDay = {
@@ -356,6 +364,9 @@ export function App() {
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
   const [teamDashboard, setTeamDashboard] = useState<TeamDashboard | null>(null)
   const [teamRepoIds, setTeamRepoIds] = useState<string[]>([])
+  const [teamRangeDays, setTeamRangeDays] = useState<RangeDays>(90)
+  const [teamRepoFilter, setTeamRepoFilter] = useState('all')
+  const [teamMemberFilter, setTeamMemberFilter] = useState('all')
   const [teamName, setTeamName] = useState('')
   const [teamMemberUsername, setTeamMemberUsername] = useState('')
   const [teamBusy, setTeamBusy] = useState(false)
@@ -629,8 +640,17 @@ export function App() {
     void loadSystemStatus()
   }
 
-  const loadTeam = async (teamId: string) => {
-    const result = await api<TeamDashboard>(`/teams/${teamId}`)
+  const loadTeam = async (
+    teamId: string,
+    filters: { days?: RangeDays; repoId?: string; memberId?: string } = {},
+  ) => {
+    const days = filters.days ?? teamRangeDays
+    const repoId = filters.repoId ?? teamRepoFilter
+    const memberId = filters.memberId ?? teamMemberFilter
+    const query = new URLSearchParams({ days: days === 'all' ? '0' : String(days) })
+    if (repoId !== 'all') query.set('repoId', repoId)
+    if (memberId !== 'all') query.set('memberId', memberId)
+    const result = await api<TeamDashboard>(`/teams/${teamId}?${query}`)
     setSelectedTeamId(teamId)
     setTeamDashboard(result)
     setTeamRepoIds(result.repositories.map((repo) => repo.id))
@@ -641,6 +661,7 @@ export function App() {
 
   const openTeamPanel = async () => {
     setTeamPanelOpen(true)
+    window.history.pushState({ view: 'team' }, '', '/team')
     setTeamFeedback(null)
     setTeamBusy(true)
     try {
@@ -653,6 +674,11 @@ export function App() {
     } finally {
       setTeamBusy(false)
     }
+  }
+
+  const closeTeamWorkspace = () => {
+    setTeamPanelOpen(false)
+    window.history.pushState({ view: 'dashboard' }, '', '/')
   }
 
   const createTeam = async () => {
@@ -907,6 +933,80 @@ export function App() {
 
   if (!isAuthenticated) {
     return <AuthLanding onConnectGitHub={connectGitHub} />
+  }
+
+  if (teamPanelOpen && user) {
+    const teamMetrics = teamDashboard?.analytics.totals
+    const teamActivity = teamDashboard?.analytics.activity ?? []
+    const activityPoints = (key: 'commits' | 'pullRequests' | 'reviews') => teamActivity.map((day) => ({
+      key: day.date,
+      label: new Date(`${day.date}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      value: day[key],
+    }))
+    return (
+      <main className="app-shell team-workspace-page">
+        <section className="team-page-header">
+          <div className="aurora aurora-a" />
+          <div className="aurora aurora-b" />
+          <nav className="topbar workspace-topbar">
+            <div className="brand"><span className="brand-mark"><Activity size={18} /></span><span>DevPulse</span></div>
+            <WorkspaceSessionMenu
+              accountMenuOpen={accountMenuOpen}
+              avatarUrl={user.avatarUrl}
+              onLogout={logout}
+              onOpenSettings={() => { closeTeamWorkspace(); openSettings() }}
+              onToggle={() => setAccountMenuOpen((open) => !open)}
+              username={user.username}
+            />
+          </nav>
+          <div className="team-page-title">
+            <button className="secondary-button compact-button" onClick={closeTeamWorkspace}><ArrowLeft size={17} />Dashboard</button>
+            <div><p className="eyebrow">Supervisor Workspace</p><h1>Shared repository performance</h1><p>Team analytics are limited to repositories explicitly shared with this workspace.</p></div>
+          </div>
+        </section>
+
+        <section className="team-page-content">
+          <div className="team-page-toolbar glass-panel">
+            <div className="team-tabs">
+              {teams.map((team) => <button className={selectedTeamId === team.id ? 'active' : ''} key={team.id} onClick={() => void loadTeam(team.id)}>{team.name}</button>)}
+            </div>
+            <div className="team-filters">
+              <label><span>Repository</span><select value={teamRepoFilter} onChange={(event) => { const value = event.target.value; setTeamRepoFilter(value); if (selectedTeamId) void loadTeam(selectedTeamId, { repoId: value }) }}><option value="all">All shared repos</option>{teamDashboard?.repositories.map((repo) => <option key={repo.id} value={repo.id}>{repo.fullName}</option>)}</select></label>
+              <label><span>Timeframe</span><select value={teamRangeDays} onChange={(event) => { const value = event.target.value === 'all' ? 'all' : Number(event.target.value) as RangeDays; setTeamRangeDays(value); if (selectedTeamId) void loadTeam(selectedTeamId, { days: value }) }}><option value={30}>30 days</option><option value={90}>90 days</option><option value={365}>1 year</option><option value="all">All time</option></select></label>
+              <label><span>Person</span><select value={teamMemberFilter} onChange={(event) => { const value = event.target.value; setTeamMemberFilter(value); if (selectedTeamId) void loadTeam(selectedTeamId, { memberId: value }) }}><option value="all">All teammates</option>{teamDashboard?.members.map((member) => <option key={member.id} value={member.id}>{member.username}</option>)}</select></label>
+            </div>
+          </div>
+
+          {teamFeedback ? <div className={`team-feedback ${teamFeedback.tone}`}>{teamFeedback.message}</div> : null}
+          {teamDashboard && teamMetrics ? (
+            <>
+              <div className="team-metrics team-page-metrics">
+                <StatPill label="Shared repos" value={String(teamMetrics.repositories)} />
+                <StatPill label="Commits" value={String(teamMetrics.commits)} />
+                <StatPill label="Pull requests" value={String(teamMetrics.pullRequests)} />
+                <StatPill label="Merged PRs" value={String(teamMetrics.mergedPullRequests)} />
+                <StatPill label="Reviews" value={String(teamMetrics.reviews)} />
+              </div>
+              <div className="team-chart-grid">
+                <section className="glass-panel"><div className="team-chart-heading"><div><p className="eyebrow">Delivery</p><h2>Commit activity</h2></div><strong>{teamMetrics.commits}</strong></div><TrendLineChart points={activityPoints('commits')} subtitle="Commits over time" tone="mint" valueSuffix="" /></section>
+                <section className="glass-panel"><div className="team-chart-heading"><div><p className="eyebrow">Collaboration</p><h2>Pull requests</h2></div><strong>{teamMetrics.pullRequests}</strong></div><TrendLineChart points={activityPoints('pullRequests')} subtitle="PRs opened over time" tone="amber" valueSuffix="" /></section>
+                <section className="glass-panel"><div className="team-chart-heading"><div><p className="eyebrow">Responsiveness</p><h2>Reviews</h2></div><strong>{teamMetrics.reviews}</strong></div><TrendLineChart points={activityPoints('reviews')} subtitle="Reviews submitted over time" tone="rose" valueSuffix="" /></section>
+              </div>
+
+              <details className="glass-panel team-management">
+                <summary><div><p className="eyebrow">Workspace settings</p><h2>Manage team</h2></div><ChevronDown size={20} /></summary>
+                <div className="team-toolbar"><div className="team-inline-form"><input value={teamName} onChange={(event) => setTeamName(event.target.value)} placeholder="New team name" /><button className="primary-button compact-button" onClick={() => void createTeam()} disabled={teamBusy || !teamName.trim()}>Create team</button></div></div>
+                <div className="team-columns">
+                  <section><div className="team-section-heading"><div><p className="eyebrow">Repositories</p><h3>Shared with this team</h3></div>{['owner', 'admin'].includes(teamDashboard.team.role) ? <button className="primary-button compact-button" onClick={() => void saveTeamRepos()} disabled={teamBusy || teamRepoIds.length === teamDashboard.repositories.length && teamRepoIds.every((id) => teamDashboard.repositories.some((repo) => repo.id === id))}>{teamBusy ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}Save</button> : null}</div><div className="team-repo-picker">{(overview?.repos ?? []).map((repo) => { const checked = teamRepoIds.includes(repo.id); return <label key={repo.id} className={checked ? 'selected' : ''}><input type="checkbox" checked={checked} disabled={teamBusy} onChange={() => setTeamRepoIds((current) => checked ? current.filter((id) => id !== repo.id) : [...current, repo.id])} /><span><strong>{repo.fullName}</strong><small>{repo.provider}</small></span></label> })}</div></section>
+                  <section><div className="team-section-heading"><div><p className="eyebrow">Members</p><h3>{teamDashboard.members.length} teammates</h3></div></div>{['owner', 'admin'].includes(teamDashboard.team.role) ? <div className="team-inline-form"><input value={teamMemberUsername} onChange={(event) => setTeamMemberUsername(event.target.value)} placeholder="GitHub username" /><button className="secondary-button compact-button" onClick={() => void addTeamMember()} disabled={teamBusy || !teamMemberUsername.trim()}>Add</button></div> : null}<div className="team-member-list">{teamDashboard.members.map((member) => <div key={member.id}>{member.avatarUrl ? <img src={member.avatarUrl} alt="" /> : <Users size={18} />}<span><strong>{member.username}</strong><small>{member.role} · {member.commits} commits · {member.pullRequests} PRs</small></span></div>)}</div></section>
+                </div>
+                {teamDashboard.team.role === 'owner' ? <div className="team-danger-zone"><div><p className="eyebrow">Danger zone</p><h3>Delete this team</h3><span>Repository data stays in DevPulse.</span></div>{teamDeleteOpen ? <div className="team-delete-confirmation"><label><span>Type <strong>delete team</strong> to confirm</span><input value={teamDeleteConfirmation} onChange={(event) => setTeamDeleteConfirmation(event.target.value)} placeholder="delete team" /></label><div><button className="secondary-button compact-button" onClick={() => { setTeamDeleteOpen(false); setTeamDeleteConfirmation('') }}>Cancel</button><button className="danger-button compact-button" onClick={() => void deleteTeam()} disabled={teamBusy || teamDeleteConfirmation !== 'delete team'}><Trash2 size={16} />Delete team</button></div></div> : <button className="danger-button compact-button" onClick={() => setTeamDeleteOpen(true)}><Trash2 size={16} />Delete team</button>}</div> : null}
+              </details>
+            </>
+          ) : <div className="glass-panel empty-state">Create or select a team to start viewing shared analytics.</div>}
+        </section>
+      </main>
+    )
   }
 
   return (

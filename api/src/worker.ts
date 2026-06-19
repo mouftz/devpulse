@@ -93,7 +93,10 @@ const runLoop = async () => {
       await sleep(5_000)
       continue
     }
-    if (!job) continue
+    if (!job) {
+      await sleep(1_000)
+      continue
+    }
 
     try {
       await processJob(job)

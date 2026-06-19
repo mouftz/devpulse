@@ -51,10 +51,9 @@ const queueTransport = (): QueueTransport =>
       await redis().lpush(SYNC_QUEUE_KEY, payload)
     },
     pop: async () => {
-      // Keep the blocking window below managed Redis idle timeouts so a
-      // provider disconnect cannot strand an indefinitely pending command.
-      const result = await redis().brpop(SYNC_QUEUE_KEY, 5)
-      return result?.[1] ?? null
+      // Managed Redis providers may close blocking commands during idle
+      // periods. Non-blocking polling keeps the API worker portable.
+      return redis().rpop(SYNC_QUEUE_KEY)
     },
     depth: async () => redis().llen(SYNC_QUEUE_KEY),
   }

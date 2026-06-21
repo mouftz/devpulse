@@ -9,3 +9,6 @@ dist/
 *.js.map
 __pycache__/
 *.pyc
+
+# Private keys
+*.pem

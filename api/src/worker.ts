@@ -5,7 +5,6 @@ import { syncGitHubRepo } from './routes/repos.js'
 import { enqueueDueRepos, enqueueSyncJob, popSyncJob, type SyncJob } from './lib/sync-queue.js'
 import { retryAttempt, retryDelayMs, shouldRetrySyncJob } from './lib/retry-policy.js'
 import { trainPrCycleModel } from './lib/ml-client.js'
-import { decryptToken } from './lib/token-crypto.js'
 
 const SYNC_INTERVAL_SECONDS = Math.max(60, Number(process.env.SYNC_INTERVAL_SECONDS ?? 86400))
 const RUN_ON_START = String(process.env.RUN_ON_START ?? 'true') === 'true'
@@ -37,12 +36,12 @@ const processJob = async (job: SyncJob) => {
   if (job.provider === 'github') {
     const user = await prisma.user.findUnique({
       where: { id: repo.ownerId },
-      select: { id: true, username: true, giteaUsername: true, accessToken: true },
+      select: { id: true, username: true, giteaUsername: true },
     })
-    if (!user || !user.accessToken) {
-      throw new Error(`GitHub token missing for repo ${repo.fullName}`)
+    if (!user) {
+      throw new Error(`GitHub user missing for repo ${repo.fullName}`)
     }
-    await syncGitHubRepo({ ...user, accessToken: decryptToken(user.accessToken) }, { id: repo.id, fullName: repo.fullName })
+    await syncGitHubRepo(user, { id: repo.id, fullName: repo.fullName })
     log(`synced github repo ${repo.fullName}`)
     return
   }

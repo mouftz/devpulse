@@ -103,11 +103,14 @@ test('POST /auth/logout clears the session cookie', async () => {
 test('POST /auth/unlink/github clears the saved GitHub token', async () => {
   const app = createApp()
   const originalUserUpdate = prisma.user.update
+  let updateArgs: unknown
 
-  prisma.user.update = (async () =>
-    ({
+  prisma.user.update = (async (args: Parameters<typeof prisma.user.update>[0]) => {
+    updateArgs = args
+    return {
       id: 'user-1',
-    })) as unknown as typeof prisma.user.update
+    }
+  }) as unknown as typeof prisma.user.update
 
   try {
     const response = await app.inject({
@@ -118,6 +121,15 @@ test('POST /auth/unlink/github clears the saved GitHub token', async () => {
 
     assert.equal(response.statusCode, 200)
     assert.deepEqual(response.json(), { provider: 'github', connected: false })
+    assert.deepEqual(updateArgs, {
+      where: { id: 'user-1' },
+      data: {
+        accessToken: '',
+        githubInstallationId: null,
+        githubInstallationToken: null,
+        githubInstallationTokenExpiresAt: null,
+      },
+    })
   } finally {
     prisma.user.update = originalUserUpdate
     await app.close()

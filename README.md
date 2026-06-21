@@ -9,7 +9,7 @@ predictions with confidence ranges.
 
 The current version is focused on one clean loop:
 
-1. Connect GitHub with OAuth.
+1. Connect GitHub with your GitHub App install.
 2. Optionally connect any Gitea server from Settings.
 3. Discover repositories.
 4. Sync them in the background through Redis.
@@ -24,7 +24,7 @@ recommendation to the repository and evidence that produced it.
 
 ## What Works Today
 
-- GitHub OAuth sign-in with an HTTP-only session cookie
+- GitHub App sign-in with an HTTP-only session cookie
 - Per-user Gitea connections for any compatible server, with encrypted access-token storage
 - Supervisor team workspaces with explicit shared-repository assignment and role-based membership
 - Team-only delivery totals for commits, pull requests, merges, and reviews without exposing personal repos
@@ -75,7 +75,7 @@ recommendation to the repository and evidence that produced it.
 ## Architecture
 
 ```text
-GitHub OAuth / per-user Gitea token
+GitHub App / per-user Gitea token
            |
            v
       Fastify API
@@ -96,7 +96,7 @@ The API owns auth, provider sync, database writes, analytics responses, and
 repo visibility state. The worker consumes Redis jobs and performs background
 syncs with bounded exponential retry, schedules stale repositories, and starts
 model retraining. The ML service trains and serves PR-cycle predictions. The
-frontend reads the APIs using the HTTP-only session cookie created after OAuth.
+frontend reads the APIs using the HTTP-only session cookie created after sign-in.
 
 ## Analytics and Recommendations
 
@@ -152,6 +152,8 @@ JWT_SECRET=change_me_in_production
 
 GITHUB_CLIENT_ID=
 GITHUB_CLIENT_SECRET=
+GITHUB_APP_ID=
+GITHUB_APP_PRIVATE_KEY=
 GITHUB_CALLBACK_URL=http://localhost:3000/auth/github/callback
 
 REDIS_URL=redis://localhost:6379
@@ -242,17 +244,18 @@ curl -X POST http://localhost:8001/train/pr-cycle
 The background worker also retrains on startup and on the configured training
 interval.
 
-## GitHub OAuth Setup
+## GitHub App Setup
 
-Create a GitHub OAuth app and use this callback URL:
+Create a GitHub App and use this callback URL for the web sign-in flow:
 
 ```text
 http://localhost:3000/auth/github/callback
 ```
 
-Put the client ID and client secret in the root `.env`. After login, the API
-stores the GitHub access token, signs a `devpulse_token` cookie, and redirects
-back to the frontend.
+Put the GitHub App client ID and client secret in the root `.env`, plus the App
+ID and private key for installation-token signing. After login, the API stores
+the GitHub user token, installation metadata, signs a `devpulse_token` cookie,
+and redirects back to the frontend.
 
 ## Helpful Commands
 
@@ -279,8 +282,8 @@ npm test
 | Route | Method | Purpose |
 | --- | --- | --- |
 | `/health` | GET | API health check |
-| `/auth/github` | GET | Start GitHub OAuth |
-| `/auth/github/callback` | GET | GitHub OAuth callback |
+| `/auth/github` | GET | Start GitHub App sign-in |
+| `/auth/github/callback` | GET | GitHub App callback |
 | `/auth/me` | GET | Current session user |
 | `/auth/logout` | POST | Clear session cookie |
 | `/auth/system` | GET | API / provider / queue status |
@@ -341,3 +344,4 @@ cd ml-service && python -m unittest discover -s tests
   access tokens. Existing plaintext local tokens remain readable for migration.
 - Generate a token key with `openssl rand -base64 32`.
 - `.DS_Store` is ignored and should stay untracked.
+- This is still a work in progress.

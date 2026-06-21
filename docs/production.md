@@ -14,9 +14,9 @@ The zero-cost deployment uses:
 1. Create a Neon Free project and copy its pooled PostgreSQL connection string.
 2. Create an Upstash Redis Free database and copy its TLS `rediss://` URL, REST URL, and REST token.
 3. Push the repository, then create a Render Blueprint from `render.yaml`.
-4. Supply the prompted database, Redis, OAuth, service, and frontend values.
+4. Supply the prompted database, Redis, GitHub App, service, and frontend values.
 5. After Render assigns URLs, set the values below and redeploy the affected services.
-6. Add the production callback URL to the GitHub OAuth application's callback URL.
+6. Add the production callback URL to the GitHub App's callback URL.
 
 | Variable | Service | Value |
 | --- | --- | --- |
@@ -28,6 +28,8 @@ The zero-cost deployment uses:
 | `VITE_API_URL` | Web | `https://devpulse-api.onrender.com` (use the actual assigned URL) |
 | `FRONTEND_URL` | API | The assigned `devpulse-web` URL |
 | `GITHUB_CALLBACK_URL` | API | The API URL plus `/auth/github/callback` |
+| `GITHUB_APP_ID` | API | The GitHub App ID |
+| `GITHUB_APP_PRIVATE_KEY` | API | The GitHub App private key PEM |
 
 The worker runs inside the API process on this free deployment. It processes
 queued syncs while the API is awake and performs catch-up scheduling whenever
@@ -66,7 +68,7 @@ The intended managed architecture is:
 - Cloud Run Job: database migrations
 - Cloud SQL for PostgreSQL
 - Memorystore for Redis on a VPC
-- Secret Manager for database, OAuth, JWT, Gitea, and ML service secrets
+- Secret Manager for database, GitHub App, JWT, Gitea, and ML service secrets
 - Cloud Scheduler for the periodic sync trigger
 - Artifact Registry for container images
 
@@ -87,6 +89,8 @@ service consumes.
 - `PUBLIC_API_URL`
 - `FRONTEND_URL`
 - `GITHUB_CALLBACK_URL`
+- `GITHUB_APP_ID`
+- `GITHUB_APP_PRIVATE_KEY`
 
 Use Workload Identity Federation for GitHub Actions instead of downloading a
 service-account JSON key. The CI workflow builds every image; deployment can be

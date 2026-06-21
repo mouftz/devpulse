@@ -58,7 +58,7 @@ export function AuthLanding({ onConnectGitHub }: AuthLandingProps) {
               </div>
             </div>
             <div className="auth-note">
-              <span className="connection-pill connected">GitHub OAuth</span>
+              <span className="connection-pill connected">GitHub App</span>
               <span className="connection-pill disconnected">Gitea optional</span>
             </div>
           </section>

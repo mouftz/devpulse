@@ -3,7 +3,7 @@ import got from 'got'
 import prisma from '../db.js'
 import { encryptToken } from '../lib/token-crypto.js'
 import { getQueueDepth } from '../lib/sync-queue.js'
-
+import { exchangeInstallationToken, storeInstallationToken, uninstallGitHubAppInstallation } from '../lib/github-app.js'
 type GitHubTokenResponse = {
   access_token: string
   token_type: string
@@ -43,7 +43,7 @@ export async function authRoutes(app: FastifyInstance) {
     const params = new URLSearchParams({
       client_id: clientId,
       redirect_uri: callbackUrl(),
-      scope: 'read:user user:email repo',
+      scope: 'read:user user:email',
       state,
     })
 
@@ -51,17 +51,38 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   app.get<{
-    Querystring: { code?: string; error?: string; error_description?: string }
+    Querystring: { code?: string; error?: string; error_description?: string; installation_id?: string }
   }>('/github/callback', async (request, reply) => {
     if (request.query.error) {
       return reply.code(400).send({
         error: request.query.error,
-        message: request.query.error_description ?? 'GitHub OAuth failed',
+        message: request.query.error_description ?? 'GitHub sign-in failed',
       })
     }
+    const installationIdOnly = request.query.installation_id?.trim()
 
+if (installationIdOnly && !request.query.code) {
+  const token = request.cookies.devpulse_token
+
+  if (!token) {
+    const redirectUrl = new URL(frontendUrl())
+    redirectUrl.searchParams.set('error', 'sign-in-required')
+    return reply.redirect(redirectUrl.toString())
+  }
+
+  try {
+    const payload = app.jwt.verify<{ sub: string }>(token)
+    await storeInstallationToken(payload.sub, installationIdOnly)
+
+    const redirectUrl = new URL(frontendUrl())
+    redirectUrl.searchParams.set('connected', 'github')
+    return reply.redirect(redirectUrl.toString())
+  } catch {
+    return reply.code(401).send({ error: 'Invalid session' })
+  }
+}
     if (!request.query.code) {
-      return reply.code(400).send({ error: 'Missing GitHub OAuth code' })
+      return reply.code(400).send({ error: 'Missing GitHub authorization code' })
     }
 
     const tokenResponse = await got
@@ -102,6 +123,9 @@ export async function authRoutes(app: FastifyInstance) {
       primaryEmail?.email ??
       `${githubUser.id}+${githubUser.login}@users.noreply.github.com`
 
+    const installationId = request.query.installation_id?.trim() || null
+    const installationToken = installationId ? await exchangeInstallationToken(installationId) : null
+
     const user = await prisma.user.upsert({
       where: { githubId: String(githubUser.id) },
       create: {
@@ -110,12 +134,26 @@ export async function authRoutes(app: FastifyInstance) {
         username: githubUser.login,
         avatarUrl: githubUser.avatar_url,
         accessToken: encryptToken(tokenResponse.access_token),
+        ...(installationId && installationToken
+          ? {
+              githubInstallationId: installationId,
+              githubInstallationToken: encryptToken(installationToken.token),
+              githubInstallationTokenExpiresAt: new Date(installationToken.expires_at),
+            }
+          : {}),
       },
       update: {
         email,
         username: githubUser.login,
         avatarUrl: githubUser.avatar_url,
         accessToken: encryptToken(tokenResponse.access_token),
+        ...(installationId && installationToken
+          ? {
+              githubInstallationId: installationId,
+              githubInstallationToken: encryptToken(installationToken.token),
+              githubInstallationTokenExpiresAt: new Date(installationToken.expires_at),
+            }
+          : {}),
       },
     })
 
@@ -152,6 +190,9 @@ export async function authRoutes(app: FastifyInstance) {
           email: true,
           avatarUrl: true,
           accessToken: true,
+          githubInstallationId: true,
+          githubInstallationToken: true,
+          githubInstallationTokenExpiresAt: true,
         },
       })
 
@@ -167,7 +208,8 @@ export async function authRoutes(app: FastifyInstance) {
           giteaUsername: user.giteaUsername,
           email: user.email,
           avatarUrl: user.avatarUrl,
-          githubConnected: Boolean(user.accessToken),
+          githubConnected: Boolean(user.githubInstallationId),
+          githubAppInstalled: Boolean(user.githubInstallationId),
           giteaConnected: Boolean(user.giteaUsername && user.giteaBaseUrl && user.giteaToken),
           giteaBaseUrl: user.giteaBaseUrl,
         },
@@ -177,24 +219,38 @@ export async function authRoutes(app: FastifyInstance) {
     }
   })
 
-  app.post('/unlink/github', async (request, reply) => {
-    const token = request.cookies.devpulse_token
-    if (!token) {
-      return reply.code(401).send({ error: 'Not authenticated' })
+app.post('/unlink/github', async (request, reply) => {
+  const token = request.cookies.devpulse_token
+  if (!token) {
+    return reply.code(401).send({ error: 'Not authenticated' })
+  }
+
+  try {
+    const payload = app.jwt.verify<{ sub: string }>(token)
+
+    const updatedUser = await prisma.user.update({
+      where: { id: payload.sub },
+      data: {
+        accessToken: '',
+        githubInstallationId: null,
+        githubInstallationToken: null,
+        githubInstallationTokenExpiresAt: null,
+      },
+    })
+
+    if (updatedUser.githubInstallationId) {
+      try {
+        await uninstallGitHubAppInstallation(updatedUser.githubInstallationId)
+      } catch (error) {
+        request.log.warn({ error }, 'Failed to uninstall GitHub App installation')
+      }
     }
 
-    try {
-      const payload = app.jwt.verify<{ sub: string }>(token)
-      await prisma.user.update({
-        where: { id: payload.sub },
-        data: { accessToken: '' },
-      })
-
-      return { provider: 'github', connected: false }
-    } catch {
-      return reply.code(401).send({ error: 'Invalid session' })
-    }
-  })
+    return { provider: 'github', connected: false }
+  } catch {
+    return reply.code(401).send({ error: 'Invalid session' })
+  }
+})
 
   app.post('/unlink/gitea', async (request, reply) => {
     const token = request.cookies.devpulse_token

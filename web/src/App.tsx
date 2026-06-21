@@ -408,6 +408,27 @@ export function App() {
       setUser(me.user)
       setGiteaBaseUrl(me.user.giteaBaseUrl ?? '')
 
+      if (!me.user.githubConnected) {
+        setOverview({
+          totals: { repos: 0, syncedRepos: 0, commits: 0, pullRequests: 0 },
+          repos: [],
+        })
+        setActivity({ total: 0, days: [] })
+        setInsights({
+          windowDays: rangeDays === 'all' ? 0 : rangeDays,
+          activeRepos: 0,
+          mergedPullRequests: 0,
+          averagePrCycleHours: null,
+          averageReviewLatencyHours: null,
+          staleRepos: 0,
+          queueDepth: 0,
+          recommendations: [],
+        })
+        setSelectedRepoId(null)
+        setState('ready')
+        return
+      }
+
       await Promise.all([api('/github/repos'), api('/gitea/repos').catch(() => null)])
       const { nextOverview } = await refreshDashboard()
       setSelectedRepoId((current) => current ?? nextOverview.repos.find((repo) => repo.lastSyncedAt)?.id ?? null)
@@ -495,9 +516,9 @@ export function App() {
       })
   }, [selectedRepoId, rangeDays, analyticsScope])
 
-  const connectGitHub = () => {
-    window.location.href = `${API_URL}/auth/github`
-  }
+const connectGitHub = () => {
+  window.location.href = `${API_URL}/auth/github`
+}
 
   const syncAll = async () => {
     setSyncing(true)
@@ -1313,8 +1334,19 @@ export function App() {
 
             {state === 'loading' ? (
               <div className="empty-state">Loading DevPulse data...</div>
-            ) : !user ? (
-              <div className="empty-state">Connect GitHub to populate the dashboard.</div>
+            ) : !user?.githubConnected ? (
+              <div className="empty-state">
+                <p>Connect GitHub App to populate the dashboard.</p>
+                <button
+                  className="primary-button"
+                  onClick={() => {
+                    window.location.href = 'https://github.com/apps/devpulse-analytics/installations/new'
+                  }}
+                >
+                  <Github size={18} />
+                  Connect GitHub App
+                </button>
+              </div>
             ) : (
               <div className="repo-table">
                 {sortedRepos.map((repo) => (
@@ -1685,7 +1717,7 @@ export function App() {
             <div className="settings-list">
               <ProviderSetting
                 connected={user.githubConnected}
-                detail={user.githubConnected ? `Connected as ${user.username}` : 'Disconnected. Reconnect with GitHub OAuth.'}
+                detail={user.githubConnected ? `Connected as ${user.username}` : 'Disconnected. Reconnect with GitHub App.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
                 name="GitHub"
@@ -1753,7 +1785,7 @@ export function App() {
                   <StatPill label="Syncing" value={String(systemStatus.sync.repos.syncing)} />
                   <StatPill label="Queued repos" value={String(systemStatus.sync.repos.queued)} />
                   <StatPill label="Failed repos" value={String(systemStatus.sync.repos.failed)} />
-                  <StatPill label="GitHub OAuth" value={systemStatus.providers.githubOauthConfigured ? 'Ready' : 'Missing'} />
+                  <StatPill label="GitHub App" value={systemStatus.providers.githubOauthConfigured ? 'Ready' : 'Missing'} />
                   <StatPill label="Gitea connection" value={systemStatus.providers.giteaConfigured ? 'Ready' : 'Missing'} />
                 </div>
               ) : (

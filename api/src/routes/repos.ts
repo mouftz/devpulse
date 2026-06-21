@@ -13,7 +13,8 @@ import {
 import { normalizeSyncError } from '../lib/sync-errors.js'
 import { mapWithConcurrency } from '../lib/concurrency.js'
 import { predictRepoCycleTimes } from '../lib/ml-client.js'
-import { decryptToken } from '../lib/token-crypto.js'
+import { getGitHubAccessTokenForUser } from '../lib/github-app.js'
+import type { Response } from 'got'
 
 type AuthPayload = {
   sub: string
@@ -25,6 +26,10 @@ type GitHubRepo = {
   full_name: string
   default_branch: string | null
   private: boolean
+}
+
+type GitHubInstallationRepositoriesResponse = {
+  repositories: GitHubRepo[]
 }
 
 type GitHubCommit = {
@@ -110,7 +115,6 @@ export type GitHubSyncUser = {
   id: string
   username: string
   giteaUsername: string | null
-  accessToken: string
 }
 
 const getBearerToken = (request: FastifyRequest) => {
@@ -171,13 +175,14 @@ export const syncGitHubRepo = async (
   await markRepoSyncStarted(repo.id)
 
   try {
+    const accessToken = await getGitHubAccessTokenForUser(user.id)
     const commits = await paginateGitHub<GitHubCommit>(
       `https://api.github.com/repos/${repo.fullName}/commits`,
-      user.accessToken,
+      accessToken,
     )
     const pullRequests = await paginateGitHub<GitHubPullRequest>(
       `https://api.github.com/repos/${repo.fullName}/pulls`,
-      user.accessToken,
+      accessToken,
       { state: 'all' },
     )
     const reviewsByPr = new Map<number, GitHubReview[]>()
@@ -192,15 +197,15 @@ export const syncGitHubRepo = async (
           const [reviews, reviewComments, issueComments] = await Promise.all([
             paginateGitHub<GitHubReview>(
               `https://api.github.com/repos/${repo.fullName}/pulls/${pullRequest.number}/reviews`,
-              user.accessToken,
+              accessToken,
             ),
             paginateGitHub<GitHubReviewComment>(
               `https://api.github.com/repos/${repo.fullName}/pulls/${pullRequest.number}/comments`,
-              user.accessToken,
+              accessToken,
             ),
             paginateGitHub<GitHubIssueComment>(
               `https://api.github.com/repos/${repo.fullName}/issues/${pullRequest.number}/comments`,
-              user.accessToken,
+              accessToken,
             ),
           ])
           reviewsByPr.set(pullRequest.number, reviews)
@@ -381,17 +386,23 @@ export async function repoRoutes(app: FastifyInstance) {
       return null
     }
 
-    const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
-      select: { id: true, username: true, giteaUsername: true, accessToken: true },
-    })
+  const user = await prisma.user.findUnique({
+    where: { id: payload.sub },
+      select: {
+        id: true,
+        username: true,
+        giteaUsername: true,
+        githubInstallationId: true,
+        githubInstallationToken: true,
+      },
+  })
 
     if (!user) {
       reply.code(401).send({ error: 'User not found' })
       return null
     }
 
-    return { ...user, accessToken: decryptToken(user.accessToken) }
+    return user
   }
 
   app.get('/repos', async (request, reply) => {
@@ -401,14 +412,41 @@ export async function repoRoutes(app: FastifyInstance) {
     }
 
     const githubRepos: GitHubRepo[] = []
-    for await (const repo of got.paginate<GitHubRepo>('https://api.github.com/user/repos', {
-        searchParams: {
-          affiliation: 'owner,collaborator,organization_member',
-          per_page: '100',
-          sort: 'updated',
-        },
-        headers: githubHeaders(user.accessToken),
-      })) {
+    const useInstallationRepos = Boolean(user.githubInstallationId || user.githubInstallationToken)
+    const accessToken = await getGitHubAccessTokenForUser(user.id)
+    const repoUrl = useInstallationRepos ? 'https://api.github.com/installation/repositories' : 'https://api.github.com/user/repos'
+    const repoSearchParams = useInstallationRepos
+      ? { per_page: '100' }
+      : { affiliation: 'owner,collaborator,organization_member', per_page: '100', sort: 'updated' }
+
+
+    const paginationOptions = useInstallationRepos
+      ? {
+          pagination: {
+            transform: (response: Response<unknown>) =>
+              (JSON.parse(String(response.body)) as GitHubInstallationRepositoriesResponse).repositories,
+            paginate: ({ response }: { response: Response<unknown> }) => {
+              const linkHeader = Array.isArray(response.headers.link)
+                ? response.headers.link.join(',')
+                : response.headers.link ?? ''
+
+              const next = linkHeader
+                .split(',')
+                .map((part: string) => part.trim())
+                .find((part: string) => part.includes('rel="next"'))
+                ?.match(/<([^>]+)>/)?.[1]
+
+              return next ? { url: next } : false
+            },
+          },
+        }
+      : {}
+
+    for await (const repo of got.paginate<GitHubRepo>(repoUrl, {
+      searchParams: repoSearchParams,
+      headers: githubHeaders(accessToken),
+      ...paginationOptions,
+    })) {
       githubRepos.push(repo)
     }
 

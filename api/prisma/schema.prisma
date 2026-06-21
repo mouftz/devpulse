@@ -18,6 +18,9 @@ model User {
   giteaUsername String? @map("gitea_username")
   giteaBaseUrl String? @map("gitea_base_url")
   giteaToken String? @map("gitea_token")
+  githubInstallationId String? @map("github_installation_id")
+  githubInstallationToken String? @map("github_installation_token") // encrypt before storing
+  githubInstallationTokenExpiresAt DateTime? @map("github_installation_token_expires_at")
   avatarUrl    String?  @map("avatar_url")
   accessToken  String   @map("access_token")  // encrypt before storing
   createdAt    DateTime @default(now()) @map("created_at")

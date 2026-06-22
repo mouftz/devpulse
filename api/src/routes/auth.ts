@@ -196,6 +196,7 @@ export async function authRoutes(app: FastifyInstance) {
     })
 
     const token = app.jwt.sign({ sub: user.id, githubId: user.githubId })
+    console.log('COOKIE DEBUG', { nodeEnv: process.env.NODE_ENV, frontendUrl: frontendUrl() })
     reply.setCookie('devpulse_token', token, {
       httpOnly: true,
       path: '/',

@@ -516,8 +516,8 @@ export function App() {
       })
   }, [selectedRepoId, rangeDays, analyticsScope])
 
-const connectGitHub = () => {
-  window.location.href = `${API_URL}/auth/github`
+const connectGitHub = (tier: 'standard' | 'full') => {
+  window.location.href = `${API_URL}/auth/github/${tier}`
 }
 
   const syncAll = async () => {
@@ -1721,7 +1721,7 @@ const connectGitHub = () => {
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
                 name="GitHub"
-                onConnect={connectGitHub}
+                onConnect={() => connectGitHub('standard')}
                 onUnlink={() => void unlinkProvider('github')}
               />
               <ProviderSetting

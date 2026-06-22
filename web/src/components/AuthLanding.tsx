@@ -1,7 +1,7 @@
-import { Activity, GitBranch, Github } from 'lucide-react'
+import { Activity, GitBranch, Github, Lock, ShieldCheck } from 'lucide-react'
 
 type AuthLandingProps = {
-  onConnectGitHub: () => void
+  onConnectGitHub: (tier: 'standard' | 'full') => void
 }
 
 export function AuthLanding({ onConnectGitHub }: AuthLandingProps) {
@@ -18,15 +18,13 @@ export function AuthLanding({ onConnectGitHub }: AuthLandingProps) {
             <span>DevPulse</span>
           </div>
         </nav>
-
         <div className="auth-layout">
           <section className="auth-copy">
             <p className="eyebrow">Developer Analytics</p>
             <h1 className="auth-title">Connect once, then land straight in your engineering stats.</h1>
             <p className="hero-text auth-text">
               Bring repository activity, pull requests, and review timing into one workspace.
-              DevPulse signs you in with GitHub today, then lets you layer Gitea on top inside
-              the product.
+              Choose how much GitHub access to grant — you can change this later.
             </p>
             <div className="auth-pills">
               <span>Commit history</span>
@@ -35,18 +33,36 @@ export function AuthLanding({ onConnectGitHub }: AuthLandingProps) {
               <span>Repository health</span>
             </div>
           </section>
-
           <section className="glass-panel auth-panel">
             <div>
               <p className="eyebrow">Get Started</p>
-              <h2>Choose your connection path</h2>
+              <h2>Choose your access level</h2>
             </div>
             <div className="auth-provider-list">
-              <button className="auth-provider-card primary-auth-card" onClick={onConnectGitHub}>
-                <Github size={22} />
+              <button
+                className="auth-provider-card primary-auth-card"
+                onClick={() => onConnectGitHub('standard')}
+              >
+                <ShieldCheck size={22} />
                 <div>
-                  <strong>Continue with GitHub</strong>
-                  <span>Creates your DevPulse session and opens the stats workspace.</span>
+                  <strong>Standard — PR-only access</strong>
+                  <span>
+                    Pull requests, reviews, and comments. DevPulse never requests access
+                    to your repository code.
+                  </span>
+                </div>
+              </button>
+              <button
+                className="auth-provider-card primary-auth-card"
+                onClick={() => onConnectGitHub('full')}
+              >
+                <Lock size={22} />
+                <div>
+                  <strong>Full — adds commit data</strong>
+                  <span>
+                    Everything in Standard, plus commit frequency and timing for sharper
+                    burnout signals. Grants read-only repository access.
+                  </span>
                 </div>
               </button>
               <div className="auth-provider-card secondary-auth-card">

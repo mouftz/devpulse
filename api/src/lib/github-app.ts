@@ -3,52 +3,30 @@ import jwt from 'jsonwebtoken'
 const { sign: signJwt } = jwt
 import prisma from '../db.js'
 import { decryptToken, encryptToken } from './token-crypto.js'
+import { getAppCredentials, type AccessTier } from './app-tiers.js'
 
 type InstallationAccessTokenResponse = {
   token: string
   expires_at: string
 }
 
-type GitHubInstallationTokenRecord = {
-  githubInstallationId: string | null
-  githubInstallationToken: string | null
-  githubInstallationTokenExpiresAt: Date | null
-  accessToken: string
-}
-
-const requiredEnv = (name: string) => {
-  const value = process.env[name]
-  if (!value) {
-    throw new Error(`${name} is required`)
-  }
-  return value
-}
-
-const normalizedPrivateKey = () =>
-  requiredEnv('GITHUB_APP_PRIVATE_KEY').replace(/\\n/g, '\n').trim()
-
-const githubAppId = () => process.env.GITHUB_APP_ID!
-
 const githubHeaders = {
   Accept: 'application/vnd.github+json',
   'X-GitHub-Api-Version': '2022-11-28',
 }
 
-const signAppJwt = () => {
-  const appId = githubAppId()
-  if (!appId) {
-    throw new Error('GITHUB_APP_ID is required')
-  }
+const signAppJwt = (tier: AccessTier) => {
+  const { appId, privateKey } = getAppCredentials(tier)
 
-  return signJwt({}, normalizedPrivateKey(), {
+  return signJwt({}, privateKey, {
     algorithm: 'RS256',
     expiresIn: '9m',
     issuer: appId,
   })
 }
 
-export const exchangeInstallationToken = async (installationId: string) => {
-  const token = signAppJwt()
+export const exchangeInstallationToken = async (installationId: string, tier: AccessTier) => {
+  const token = signAppJwt(tier)
   return got
     .post(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
       headers: {
@@ -59,19 +37,26 @@ export const exchangeInstallationToken = async (installationId: string) => {
     .json<InstallationAccessTokenResponse>()
 }
 
-export const storeInstallationToken = async (userId: string, installationId: string) => {
-  const installationToken = await exchangeInstallationToken(installationId)
+export const storeInstallationToken = async (
+  userId: string,
+  installationId: string,
+  tier: AccessTier,
+) => {
+  const installationToken = await exchangeInstallationToken(installationId, tier)
   return prisma.user.update({
     where: { id: userId },
     data: {
       githubInstallationId: installationId,
       githubInstallationToken: encryptToken(installationToken.token),
       githubInstallationTokenExpiresAt: new Date(installationToken.expires_at),
+      githubAppKind: tier,
+      accessTier: tier,
     },
     select: {
       githubInstallationId: true,
       githubInstallationToken: true,
       githubInstallationTokenExpiresAt: true,
+      accessTier: true,
     },
   })
 }
@@ -84,12 +69,15 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
       githubInstallationId: true,
       githubInstallationToken: true,
       githubInstallationTokenExpiresAt: true,
+      accessTier: true,
     },
   })
 
   if (!user) {
     throw new Error('User not found')
   }
+
+  const tier = (user.accessTier ?? 'standard') as AccessTier
 
   const tokenExpiresAt = user.githubInstallationTokenExpiresAt?.getTime() ?? 0
   const refreshThresholdMs = 5 * 60 * 1000
@@ -98,7 +86,7 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
   }
 
   if (user.githubInstallationId) {
-    const refreshed = await exchangeInstallationToken(user.githubInstallationId)
+    const refreshed = await exchangeInstallationToken(user.githubInstallationId, tier)
     await prisma.user.update({
       where: { id: userId },
       data: {
@@ -112,13 +100,13 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
   throw new Error('Connect GitHub before syncing repositories')
 }
 
-export const uninstallGitHubAppInstallation = async (installationId: string) => {
+export const uninstallGitHubAppInstallation = async (installationId: string, tier: AccessTier) => {
   await got.delete(
     `https://api.github.com/app/installations/${installationId}`,
     {
       headers: {
         Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${signAppJwt()}`,
+        Authorization: `Bearer ${signAppJwt(tier)}`,
         'X-GitHub-Api-Version': '2022-11-28',
       },
     },

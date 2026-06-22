@@ -21,6 +21,8 @@ model User {
   githubInstallationId String? @map("github_installation_id")
   githubInstallationToken String? @map("github_installation_token") // encrypt before storing
   githubInstallationTokenExpiresAt DateTime? @map("github_installation_token_expires_at")
+  accessTier   String   @default("standard") @map("access_tier")
+  githubAppKind String? @map("github_app_kind")
   avatarUrl    String?  @map("avatar_url")
   accessToken  String   @map("access_token")  // encrypt before storing
   createdAt    DateTime @default(now()) @map("created_at")

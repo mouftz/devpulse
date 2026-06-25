@@ -5,6 +5,7 @@ import { encryptToken } from '../lib/token-crypto.js'
 import { getQueueDepth } from '../lib/sync-queue.js'
 import {
   exchangeInstallationToken,
+  GitHubInstallationTokenError,
   storeInstallationToken,
   uninstallGitHubAppInstallation,
 } from '../lib/github-app.js'
@@ -46,6 +47,11 @@ const frontendUrl = () => process.env.FRONTEND_URL ?? 'http://localhost:5173'
 
 const isValidTier = (value: string): value is AccessTier =>
   value === 'standard' || value === 'full'
+
+const githubInstallErrorCode = (error: unknown) =>
+  error instanceof GitHubInstallationTokenError && error.statusCode === 404
+    ? 'github-installation-mismatch'
+    : 'github-installation-token-failed'
 
 export async function authRoutes(app: FastifyInstance) {
   // ── Kick off OAuth login (tier-specific, since each App has its own
@@ -98,16 +104,26 @@ export async function authRoutes(app: FastifyInstance) {
         return reply.redirect(redirectUrl.toString())
       }
 
+      let payload: { sub: string }
       try {
-        const payload = app.jwt.verify<{ sub: string }>(token)
-        await storeInstallationToken(payload.sub, installationIdOnly, tier)
-
-        const redirectUrl = new URL(frontendUrl())
-        redirectUrl.searchParams.set('connected', tier)
-        return reply.redirect(redirectUrl.toString())
+        payload = app.jwt.verify<{ sub: string }>(token)
       } catch {
         return reply.code(401).send({ error: 'Invalid session' })
       }
+
+      try {
+        await storeInstallationToken(payload.sub, installationIdOnly, tier)
+      } catch (error) {
+        request.log.warn({ error, installationId: installationIdOnly, tier }, 'GitHub App installation token exchange failed')
+        const redirectUrl = new URL(frontendUrl())
+        redirectUrl.searchParams.set('error', githubInstallErrorCode(error))
+        redirectUrl.searchParams.set('tier', tier)
+        return reply.redirect(redirectUrl.toString())
+      }
+
+      const redirectUrl = new URL(frontendUrl())
+      redirectUrl.searchParams.set('connected', tier)
+      return reply.redirect(redirectUrl.toString())
     }
 
     // Case 2: full OAuth login flow
@@ -156,9 +172,17 @@ export async function authRoutes(app: FastifyInstance) {
       `${githubUser.id}+${githubUser.login}@users.noreply.github.com`
 
     const installationId = request.query.installation_id?.trim() || null
-    const installationToken = installationId
-      ? await exchangeInstallationToken(installationId, tier)
-      : null
+    let installationToken: Awaited<ReturnType<typeof exchangeInstallationToken>> | null = null
+    let installationError: unknown = null
+
+    if (installationId) {
+      try {
+        installationToken = await exchangeInstallationToken(installationId, tier)
+      } catch (error) {
+        installationError = error
+        request.log.warn({ error, installationId, tier }, 'GitHub App installation token exchange failed during login')
+      }
+    }
 
     const user = await prisma.user.upsert({
       where: { githubId: String(githubUser.id) },
@@ -191,6 +215,13 @@ export async function authRoutes(app: FastifyInstance) {
               githubAppKind: tier,
               accessTier: tier,
             }
+          : installationError
+            ? {
+                githubInstallationId: null,
+                githubInstallationToken: null,
+                githubInstallationTokenExpiresAt: null,
+                githubAppKind: null,
+              }
           : {}),
       },
     })
@@ -205,7 +236,12 @@ export async function authRoutes(app: FastifyInstance) {
     })
 
     const redirectUrl = new URL(frontendUrl())
-    redirectUrl.searchParams.set('connected', tier)
+    if (installationError) {
+      redirectUrl.searchParams.set('error', githubInstallErrorCode(installationError))
+      redirectUrl.searchParams.set('tier', tier)
+    } else {
+      redirectUrl.searchParams.set('connected', tier)
+    }
     return reply.redirect(redirectUrl.toString())
   })
 
@@ -271,7 +307,7 @@ export async function authRoutes(app: FastifyInstance) {
 
       const existingUser = await prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { githubInstallationId: true, accessTier: true },
+        select: { githubInstallationId: true, accessTier: true, githubAppKind: true },
       })
 
       await prisma.user.update({
@@ -286,7 +322,9 @@ export async function authRoutes(app: FastifyInstance) {
 
       if (existingUser?.githubInstallationId) {
         try {
-          const tier = (existingUser.accessTier ?? 'standard') as AccessTier
+          const tier = (existingUser.githubAppKind === 'standard' || existingUser.githubAppKind === 'full'
+            ? existingUser.githubAppKind
+            : existingUser.accessTier ?? 'standard') as AccessTier
           await uninstallGitHubAppInstallation(existingUser.githubInstallationId, tier)
         } catch (error) {
           request.log.warn({ error }, 'Failed to uninstall GitHub App installation')

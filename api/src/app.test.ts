@@ -656,7 +656,7 @@ test('GET /github/insights returns aggregate analytics for an authenticated user
     ([
       {
         id: 'repo-1',
-        lastSyncedAt: new Date('2026-06-17T12:00:00.000Z'),
+        lastSyncedAt: new Date(),
       },
       {
         id: 'repo-2',

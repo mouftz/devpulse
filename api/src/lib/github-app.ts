@@ -1,4 +1,4 @@
-import got from 'got'
+import got, { HTTPError } from 'got'
 import jwt from 'jsonwebtoken'
 const { sign: signJwt } = jwt
 import prisma from '../db.js'
@@ -25,16 +25,47 @@ const signAppJwt = (tier: AccessTier) => {
   })
 }
 
+export class GitHubInstallationTokenError extends Error {
+  statusCode: number | undefined
+
+  constructor(message: string, statusCode?: number) {
+    super(message)
+    this.name = 'GitHubInstallationTokenError'
+    this.statusCode = statusCode
+  }
+}
+
 export const exchangeInstallationToken = async (installationId: string, tier: AccessTier) => {
+  const { appId } = getAppCredentials(tier)
   const token = signAppJwt(tier)
-  return got
-    .post(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
-      headers: {
-        ...githubHeaders,
-        Authorization: `Bearer ${token}`,
-      },
-    })
-    .json<InstallationAccessTokenResponse>()
+
+  try {
+    return await got
+      .post(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
+        headers: {
+          ...githubHeaders,
+          Authorization: `Bearer ${token}`,
+        },
+      })
+      .json<InstallationAccessTokenResponse>()
+  } catch (error) {
+    if (error instanceof HTTPError) {
+      const statusCode = error.response.statusCode
+      if (statusCode === 404) {
+        throw new GitHubInstallationTokenError(
+          `GitHub installation ${installationId} does not belong to the ${tier} app (app id ${appId}). Reinstall the matching GitHub App or clear the stale installation on this user.`,
+          statusCode,
+        )
+      }
+
+      throw new GitHubInstallationTokenError(
+        `GitHub installation token exchange failed for ${tier} app (app id ${appId}) with status ${statusCode}.`,
+        statusCode,
+      )
+    }
+
+    throw error
+  }
 }
 
 export const storeInstallationToken = async (
@@ -57,6 +88,7 @@ export const storeInstallationToken = async (
       githubInstallationToken: true,
       githubInstallationTokenExpiresAt: true,
       accessTier: true,
+      githubAppKind: true,
     },
   })
 }
@@ -70,6 +102,7 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
       githubInstallationToken: true,
       githubInstallationTokenExpiresAt: true,
       accessTier: true,
+      githubAppKind: true,
     },
   })
 
@@ -77,7 +110,9 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
     throw new Error('User not found')
   }
 
-  const tier = (user.accessTier ?? 'standard') as AccessTier
+  const tier = (user.githubAppKind === 'standard' || user.githubAppKind === 'full'
+    ? user.githubAppKind
+    : user.accessTier ?? 'standard') as AccessTier
 
   const tokenExpiresAt = user.githubInstallationTokenExpiresAt?.getTime() ?? 0
   const refreshThresholdMs = 5 * 60 * 1000

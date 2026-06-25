@@ -80,6 +80,43 @@ test('GET /auth/me rejects invalid session cookie', async () => {
   }
 })
 
+test('GET /auth/session redirects cookie sessions back to the frontend with a session token', async () => {
+  const app = createApp()
+  try {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/session?returnTo=${encodeURIComponent('http://localhost:5173/?connected=standard&authBridge=1')}`,
+      cookies: await authCookie(app),
+    })
+
+    assert.equal(response.statusCode, 302)
+    const redirect = new URL(String(response.headers.location))
+    assert.equal(redirect.origin, 'http://localhost:5173')
+    assert.equal(redirect.searchParams.get('connected'), 'standard')
+    assert.equal(redirect.searchParams.get('authBridge'), '1')
+    assert.ok(redirect.searchParams.get('session'))
+  } finally {
+    await app.close()
+  }
+})
+
+test('GET /auth/session rejects missing cookie sessions through the frontend redirect', async () => {
+  const app = createApp()
+  try {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/auth/session?returnTo=${encodeURIComponent('http://localhost:5173/?connected=standard&authBridge=1')}`,
+    })
+
+    assert.equal(response.statusCode, 302)
+    const redirect = new URL(String(response.headers.location))
+    assert.equal(redirect.origin, 'http://localhost:5173')
+    assert.equal(redirect.searchParams.get('error'), 'not-authenticated')
+  } finally {
+    await app.close()
+  }
+})
+
 test('GET /auth/github/callback/:tier continues install-only callbacks into OAuth when no session exists', async () => {
   const previousClientId = process.env.GITHUB_CLIENT_ID
   const previousClientSecret = process.env.GITHUB_CLIENT_SECRET

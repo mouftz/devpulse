@@ -94,6 +94,19 @@ const githubInstallErrorCode = (error: unknown) =>
 const requestToken = (request: FastifyRequest) =>
   request.headers.authorization?.replace(/^Bearer /, '') || request.cookies.devpulse_token
 
+const safeFrontendReturnUrl = (value?: string) => {
+  const fallback = new URL(frontendUrl())
+  if (!value) return fallback
+
+  try {
+    const parsed = new URL(value)
+    const allowed = new URL(frontendUrl())
+    return parsed.origin === allowed.origin ? parsed : fallback
+  } catch {
+    return fallback
+  }
+}
+
 export async function authRoutes(app: FastifyInstance) {
   // ── Kick off OAuth login (tier-specific, since each App has its own
   //    client_id/client_secret used for the user-identity exchange) ──────────
@@ -328,6 +341,25 @@ export async function authRoutes(app: FastifyInstance) {
       }
     } catch {
       return reply.code(401).send({ error: 'Invalid session' })
+    }
+  })
+
+  app.get<{ Querystring: { returnTo?: string } }>('/session', async (request, reply) => {
+    const token = request.cookies.devpulse_token
+    const redirectUrl = safeFrontendReturnUrl(request.query.returnTo)
+
+    if (!token) {
+      redirectUrl.searchParams.set('error', 'not-authenticated')
+      return reply.redirect(redirectUrl.toString())
+    }
+
+    try {
+      app.jwt.verify(token)
+      redirectUrl.searchParams.set('session', token)
+      return reply.redirect(redirectUrl.toString())
+    } catch {
+      redirectUrl.searchParams.set('error', 'invalid-session')
+      return reply.redirect(redirectUrl.toString())
     }
   })
 

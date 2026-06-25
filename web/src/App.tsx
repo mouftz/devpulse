@@ -42,10 +42,21 @@ const readSessionToken = () => localStorage.getItem(SESSION_STORAGE_KEY)
 const consumeRedirectSession = () => {
   const url = new URL(window.location.href)
   const session = url.searchParams.get('session')
-  if (!session) return
+  if (!session) {
+    const connected = url.searchParams.get('connected')
+    const bridgeAttempted = url.searchParams.get('authBridge') === '1'
+
+    if (connected && !bridgeAttempted) {
+      url.searchParams.set('authBridge', '1')
+      window.location.href = `${API_URL}/auth/session?returnTo=${encodeURIComponent(url.toString())}`
+    }
+
+    return
+  }
 
   localStorage.setItem(SESSION_STORAGE_KEY, session)
   url.searchParams.delete('session')
+  url.searchParams.delete('authBridge')
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
 }
 

@@ -168,6 +168,7 @@ export async function authRoutes(app: FastifyInstance) {
       }
 
       const redirectUrl = new URL(frontendUrl())
+      redirectUrl.searchParams.set('session', token)
       redirectUrl.searchParams.set('connected', tier)
       return reply.redirect(redirectUrl.toString())
     }
@@ -332,7 +333,7 @@ export async function authRoutes(app: FastifyInstance) {
           giteaUsername: user.giteaUsername,
           email: user.email,
           avatarUrl: user.avatarUrl,
-          githubConnected: Boolean(user.githubInstallationId),
+          githubConnected: Boolean(user.githubInstallationId || user.accessToken),
           githubAppInstalled: Boolean(user.githubInstallationId),
           accessTier: user.accessTier,
           giteaConnected: Boolean(user.giteaUsername && user.giteaBaseUrl && user.giteaToken),

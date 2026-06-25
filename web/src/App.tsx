@@ -557,7 +557,7 @@ export function App() {
     }
 
     void Promise.all([
-      api<RepoSummary>(`/github/repos/${selectedRepoId}/summary?scope=${analyticsScope}`),
+      api<RepoSummary>(`/github/repos/${selectedRepoId}/summary?days=${rangeDays}&scope=${analyticsScope}`),
       api<ActivitySummary>(`/github/activity?repoId=${selectedRepoId}&days=${rangeDays}&scope=${analyticsScope}`),
       api<PrCycleTrend>(`/github/repos/${selectedRepoId}/pr-cycle?days=${rangeDays}&scope=${analyticsScope}`),
       api<ReviewLatency>(`/github/repos/${selectedRepoId}/review-latency?days=${rangeDays}&scope=${analyticsScope}`),

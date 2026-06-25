@@ -386,16 +386,18 @@ export async function repoRoutes(app: FastifyInstance) {
       return null
     }
 
-  const user = await prisma.user.findUnique({
-    where: { id: payload.sub },
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub },
       select: {
         id: true,
         username: true,
         giteaUsername: true,
         githubInstallationId: true,
         githubInstallationToken: true,
+        accessTier: true,
+        githubAppKind: true,
       },
-  })
+    })
 
     if (!user) {
       reply.code(401).send({ error: 'User not found' })
@@ -412,7 +414,11 @@ export async function repoRoutes(app: FastifyInstance) {
     }
 
     const githubRepos: GitHubRepo[] = []
-    const useInstallationRepos = Boolean(user.githubInstallationId || user.githubInstallationToken)
+    const githubAppKind = user.githubAppKind === 'standard' || user.githubAppKind === 'full'
+      ? user.githubAppKind
+      : user.accessTier
+    const requiresInstallationRepos = githubAppKind === 'full'
+    const useInstallationRepos = requiresInstallationRepos || Boolean(user.githubInstallationId || user.githubInstallationToken)
     const accessToken = await getGitHubAccessTokenForUser(user.id)
     const repoUrl = useInstallationRepos ? 'https://api.github.com/installation/repositories' : 'https://api.github.com/user/repos'
     const repoSearchParams = useInstallationRepos
@@ -451,7 +457,7 @@ export async function repoRoutes(app: FastifyInstance) {
         githubRepos.push(repo)
       }
     } catch (error) {
-      if (!useInstallationRepos) throw error
+      if (!useInstallationRepos || requiresInstallationRepos) throw error
 
       request.log.warn({ error }, 'GitHub installation repository listing failed; retrying OAuth repository listing')
       for await (const repo of got.paginate<GitHubRepo>('https://api.github.com/user/repos', {
@@ -675,12 +681,13 @@ export async function repoRoutes(app: FastifyInstance) {
     return { repo, removed: true }
   })
 
-  app.get<{ Params: { repoId: string }; Querystring: { scope?: string } }>('/repos/:repoId/summary', async (request, reply) => {
+  app.get<{ Params: { repoId: string }; Querystring: { days?: string; scope?: string } }>('/repos/:repoId/summary', async (request, reply) => {
     const user = await authenticate(request, reply)
     if (!user) {
       return
     }
     const scope = analyticsScope(request.query.scope)
+    const { start } = analyticsWindow(request.query.days, 365, 7)
 
     const repo = await prisma.repo.findFirst({
       where: {
@@ -707,12 +714,24 @@ export async function repoRoutes(app: FastifyInstance) {
     }
 
     const [commitCount, pullRequestCount, mergedPullRequests] = await Promise.all([
-      prisma.commit.count({ where: { repoId: repo.id, ...authorFilter(scope, user) } }),
-      prisma.pullRequest.count({ where: { repoId: repo.id, ...authorFilter(scope, user) } }),
+      prisma.commit.count({
+        where: {
+          repoId: repo.id,
+          ...(start ? { committedAt: { gte: start } } : {}),
+          ...authorFilter(scope, user),
+        },
+      }),
+      prisma.pullRequest.count({
+        where: {
+          repoId: repo.id,
+          ...(start ? { openedAt: { gte: start } } : {}),
+          ...authorFilter(scope, user),
+        },
+      }),
       prisma.pullRequest.findMany({
         where: {
           repoId: repo.id,
-          mergedAt: { not: null },
+          mergedAt: { not: null, ...(start ? { gte: start } : {}) },
           ...authorFilter(scope, user),
         },
         select: {

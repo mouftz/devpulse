@@ -658,6 +658,9 @@ test('GET /github/repos/:repoId/summary returns repo metrics for an authenticate
   const originalCommitCount = prisma.commit.count
   const originalPullRequestCount = prisma.pullRequest.count
   const originalPullRequestFindMany = prisma.pullRequest.findMany
+  let commitWhere: unknown
+  let pullRequestCountWhere: unknown
+  let mergedPullRequestWhere: unknown
 
   prisma.user.findUnique = (async () =>
     ({
@@ -681,10 +684,17 @@ test('GET /github/repos/:repoId/summary returns repo metrics for an authenticate
       lastSyncFinishedAt: new Date('2026-06-17T12:00:00.000Z'),
     })) as unknown as typeof prisma.repo.findFirst
 
-  prisma.commit.count = (async () => 9) as unknown as typeof prisma.commit.count
-  prisma.pullRequest.count = (async () => 3) as unknown as typeof prisma.pullRequest.count
-  prisma.pullRequest.findMany = (async () =>
-    ([
+  prisma.commit.count = (async (args: Parameters<typeof prisma.commit.count>[0]) => {
+    commitWhere = args?.where
+    return 9
+  }) as unknown as typeof prisma.commit.count
+  prisma.pullRequest.count = (async (args: Parameters<typeof prisma.pullRequest.count>[0]) => {
+    pullRequestCountWhere = args?.where
+    return 3
+  }) as unknown as typeof prisma.pullRequest.count
+  prisma.pullRequest.findMany = (async (args: Parameters<typeof prisma.pullRequest.findMany>[0]) => {
+    mergedPullRequestWhere = args?.where
+    return [
       {
         openedAt: new Date('2026-06-14T10:00:00.000Z'),
         mergedAt: new Date('2026-06-14T22:00:00.000Z'),
@@ -693,12 +703,13 @@ test('GET /github/repos/:repoId/summary returns repo metrics for an authenticate
         openedAt: new Date('2026-06-16T09:00:00.000Z'),
         mergedAt: new Date('2026-06-17T09:00:00.000Z'),
       },
-    ])) as unknown as typeof prisma.pullRequest.findMany
+    ]
+  }) as unknown as typeof prisma.pullRequest.findMany
 
   try {
     const response = await app.inject({
       method: 'GET',
-      url: '/github/repos/repo-1/summary',
+      url: '/github/repos/repo-1/summary?days=30',
       cookies: await authCookie(app),
     })
 
@@ -709,6 +720,9 @@ test('GET /github/repos/:repoId/summary returns repo metrics for an authenticate
     assert.equal(payload.metrics.pullRequests, 3)
     assert.equal(payload.metrics.mergedPullRequests, 2)
     assert.equal(payload.metrics.averagePrCycleHours, 18)
+    assert.ok((commitWhere as { committedAt?: { gte?: Date } }).committedAt?.gte instanceof Date)
+    assert.ok((pullRequestCountWhere as { openedAt?: { gte?: Date } }).openedAt?.gte instanceof Date)
+    assert.ok((mergedPullRequestWhere as { mergedAt?: { gte?: Date } }).mergedAt?.gte instanceof Date)
   } finally {
     prisma.user.findUnique = originalUserFindUnique
     prisma.repo.findFirst = originalRepoFindFirst

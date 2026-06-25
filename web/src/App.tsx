@@ -35,6 +35,19 @@ import {
 } from './lib/dashboard-utils.js'
 
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000'
+const SESSION_STORAGE_KEY = 'devpulse:session'
+
+const readSessionToken = () => localStorage.getItem(SESSION_STORAGE_KEY)
+
+const consumeRedirectSession = () => {
+  const url = new URL(window.location.href)
+  const session = url.searchParams.get('session')
+  if (!session) return
+
+  localStorage.setItem(SESSION_STORAGE_KEY, session)
+  url.searchParams.delete('session')
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+}
 
 type User = {
   id: string
@@ -278,9 +291,16 @@ const failedSyncResult = (error: unknown): SyncAllResult => ({
 })
 
 const api = async <T,>(path: string, init?: RequestInit): Promise<T> => {
+  const session = readSessionToken()
+  const headers = new Headers(init?.headers)
+  if (session && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${session}`)
+  }
+
   const response = await fetch(`${API_URL}${path}`, {
     credentials: 'include',
     ...init,
+    headers,
   })
 
   if (!response.ok) {
@@ -449,6 +469,7 @@ export function App() {
   }
 
   useEffect(() => {
+    consumeRedirectSession()
     void load()
   }, [rangeDays, analyticsScope])
 
@@ -870,6 +891,7 @@ const connectGitHub = (tier: 'standard' | 'full') => {
 
   const logout = async () => {
     await api('/auth/logout', { method: 'POST' }).catch(() => null)
+    localStorage.removeItem(SESSION_STORAGE_KEY)
     setUser(null)
     setOverview(null)
     setActivity(null)

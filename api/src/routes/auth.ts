@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import got from 'got'
 import prisma from '../db.js'
 import { encryptToken } from '../lib/token-crypto.js'
@@ -90,6 +90,9 @@ const githubInstallErrorCode = (error: unknown) =>
   error instanceof GitHubInstallationTokenError && error.statusCode === 404
     ? 'github-installation-mismatch'
     : 'github-installation-token-failed'
+
+const requestToken = (request: FastifyRequest) =>
+  request.headers.authorization?.replace(/^Bearer /, '') || request.cookies.devpulse_token
 
 export async function authRoutes(app: FastifyInstance) {
   // ── Kick off OAuth login (tier-specific, since each App has its own
@@ -267,6 +270,7 @@ export async function authRoutes(app: FastifyInstance) {
     })
 
     const redirectUrl = new URL(frontendUrl())
+    redirectUrl.searchParams.set('session', token)
     if (installationError) {
       redirectUrl.searchParams.set('error', githubInstallErrorCode(installationError))
       redirectUrl.searchParams.set('tier', tier)
@@ -277,7 +281,7 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   app.get('/me', async (request, reply) => {
-    const token = request.cookies.devpulse_token
+    const token = requestToken(request)
     if (!token) {
       return reply.code(401).send({ error: 'Not authenticated' })
     }
@@ -328,7 +332,7 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   app.post('/unlink/github', async (request, reply) => {
-    const token = request.cookies.devpulse_token
+    const token = requestToken(request)
     if (!token) {
       return reply.code(401).send({ error: 'Not authenticated' })
     }
@@ -369,7 +373,7 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   app.post('/unlink/gitea', async (request, reply) => {
-    const token = request.cookies.devpulse_token
+    const token = requestToken(request)
     if (!token) {
       return reply.code(401).send({ error: 'Not authenticated' })
     }
@@ -388,7 +392,7 @@ export async function authRoutes(app: FastifyInstance) {
   })
 
   app.get('/system', async (request, reply) => {
-    const token = request.cookies.devpulse_token
+    const token = requestToken(request)
     if (!token) {
       return reply.code(401).send({ error: 'Not authenticated' })
     }

@@ -442,12 +442,24 @@ export async function repoRoutes(app: FastifyInstance) {
         }
       : {}
 
-    for await (const repo of got.paginate<GitHubRepo>(repoUrl, {
-      searchParams: repoSearchParams,
-      headers: githubHeaders(accessToken),
-      ...paginationOptions,
-    })) {
-      githubRepos.push(repo)
+    try {
+      for await (const repo of got.paginate<GitHubRepo>(repoUrl, {
+        searchParams: repoSearchParams,
+        headers: githubHeaders(accessToken),
+        ...paginationOptions,
+      })) {
+        githubRepos.push(repo)
+      }
+    } catch (error) {
+      if (!useInstallationRepos) throw error
+
+      request.log.warn({ error }, 'GitHub installation repository listing failed; retrying OAuth repository listing')
+      for await (const repo of got.paginate<GitHubRepo>('https://api.github.com/user/repos', {
+        searchParams: { affiliation: 'owner,collaborator,organization_member', per_page: '100', sort: 'updated' },
+        headers: githubHeaders(accessToken),
+      })) {
+        githubRepos.push(repo)
+      }
     }
 
     const repos = await prisma.$transaction(

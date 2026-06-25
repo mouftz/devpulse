@@ -121,15 +121,23 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
   }
 
   if (user.githubInstallationId) {
-    const refreshed = await exchangeInstallationToken(user.githubInstallationId, tier)
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        githubInstallationToken: encryptToken(refreshed.token),
-        githubInstallationTokenExpiresAt: new Date(refreshed.expires_at),
-      },
-    })
-    return refreshed.token
+    try {
+      const refreshed = await exchangeInstallationToken(user.githubInstallationId, tier)
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          githubInstallationToken: encryptToken(refreshed.token),
+          githubInstallationTokenExpiresAt: new Date(refreshed.expires_at),
+        },
+      })
+      return refreshed.token
+    } catch (error) {
+      if (!user.accessToken) throw error
+    }
+  }
+
+  if (user.accessToken) {
+    return decryptToken(user.accessToken)
   }
 
   throw new Error('Connect GitHub before syncing repositories')

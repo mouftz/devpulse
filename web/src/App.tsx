@@ -460,11 +460,42 @@ export function App() {
         return
       }
 
-      await Promise.all([api('/github/repos'), api('/gitea/repos').catch(() => null)])
-      const { nextOverview } = await refreshDashboard()
+      await Promise.all([
+        api('/github/repos').catch((error) => {
+          setNotice({ message: `Could not refresh GitHub repositories: ${errorMessage(error)}`, tone: 'error' })
+          return null
+        }),
+        api('/gitea/repos').catch(() => null),
+      ])
+
+      const { nextOverview } = await refreshDashboard().catch(() => {
+        const emptyOverview: Overview = {
+          totals: { repos: 0, syncedRepos: 0, commits: 0, pullRequests: 0 },
+          repos: [],
+        }
+        const emptyActivity: ActivitySummary = { total: 0, days: [] }
+        const emptyInsights: DashboardInsights = {
+          windowDays: rangeDays === 'all' ? 0 : rangeDays,
+          activeRepos: 0,
+          mergedPullRequests: 0,
+          averagePrCycleHours: null,
+          averageReviewLatencyHours: null,
+          staleRepos: 0,
+          queueDepth: 0,
+          recommendations: [],
+        }
+
+        setOverview(emptyOverview)
+        setActivity(emptyActivity)
+        setInsights(emptyInsights)
+        return { nextOverview: emptyOverview, nextActivity: emptyActivity, nextInsights: emptyInsights }
+      })
+
       setSelectedRepoId((current) => current ?? nextOverview.repos.find((repo) => repo.lastSyncedAt)?.id ?? null)
       setState('ready')
-    } catch {
+    } catch (error) {
+      localStorage.removeItem(SESSION_STORAGE_KEY)
+      setNotice({ message: `Session check failed: ${errorMessage(error)}`, tone: 'error' })
       setUser(null)
       setOverview(null)
       setActivity(null)

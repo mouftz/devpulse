@@ -80,6 +80,51 @@ test('GET /auth/me rejects invalid session cookie', async () => {
   }
 })
 
+test('GET /auth/github/callback/:tier continues install-only callbacks into OAuth when no session exists', async () => {
+  const previousClientId = process.env.GITHUB_CLIENT_ID
+  const previousClientSecret = process.env.GITHUB_CLIENT_SECRET
+  const previousAppId = process.env.GITHUB_APP_ID
+  const previousPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY
+  const previousWebhookSecret = process.env.GITHUB_APP_WEBHOOK_SECRET
+
+  process.env.GITHUB_CLIENT_ID = 'client-id'
+  process.env.GITHUB_CLIENT_SECRET = 'client-secret'
+  process.env.GITHUB_APP_ID = '123'
+  process.env.GITHUB_APP_PRIVATE_KEY = 'private-key'
+  process.env.GITHUB_APP_WEBHOOK_SECRET = 'webhook-secret'
+
+  const app = createApp()
+  try {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/github/callback/standard?installation_id=141557450',
+    })
+
+    assert.equal(response.statusCode, 302)
+    const location = String(response.headers.location)
+    assert.match(location, /^https:\/\/github\.com\/login\/oauth\/authorize\?/)
+    const redirect = new URL(location)
+    assert.equal(redirect.searchParams.get('client_id'), 'client-id')
+    assert.equal(redirect.searchParams.get('redirect_uri'), 'http://localhost:3000/auth/github/callback/standard')
+    const state = redirect.searchParams.get('state')
+    assert.ok(state)
+    const decoded = JSON.parse(Buffer.from(state, 'base64url').toString('utf8')) as { installationId?: string }
+    assert.equal(decoded.installationId, '141557450')
+  } finally {
+    if (previousClientId === undefined) delete process.env.GITHUB_CLIENT_ID
+    else process.env.GITHUB_CLIENT_ID = previousClientId
+    if (previousClientSecret === undefined) delete process.env.GITHUB_CLIENT_SECRET
+    else process.env.GITHUB_CLIENT_SECRET = previousClientSecret
+    if (previousAppId === undefined) delete process.env.GITHUB_APP_ID
+    else process.env.GITHUB_APP_ID = previousAppId
+    if (previousPrivateKey === undefined) delete process.env.GITHUB_APP_PRIVATE_KEY
+    else process.env.GITHUB_APP_PRIVATE_KEY = previousPrivateKey
+    if (previousWebhookSecret === undefined) delete process.env.GITHUB_APP_WEBHOOK_SECRET
+    else process.env.GITHUB_APP_WEBHOOK_SECRET = previousWebhookSecret
+    await app.close()
+  }
+})
+
 test('POST /auth/logout clears the session cookie', async () => {
   const app = createApp()
   try {

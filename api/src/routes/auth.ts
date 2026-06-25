@@ -30,6 +30,11 @@ type GitHubEmail = {
   verified: boolean
 }
 
+type GitHubOAuthState = {
+  nonce: string
+  installationId?: string
+}
+
 const requiredEnv = (name: string) => {
   const value = process.env[name]
   if (!value) {
@@ -48,6 +53,39 @@ const frontendUrl = () => process.env.FRONTEND_URL ?? 'http://localhost:5173'
 const isValidTier = (value: string): value is AccessTier =>
   value === 'standard' || value === 'full'
 
+const encodeState = (state: GitHubOAuthState) =>
+  Buffer.from(JSON.stringify(state), 'utf8').toString('base64url')
+
+const decodeState = (value?: string) => {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as Partial<GitHubOAuthState>
+    if (typeof parsed.nonce !== 'string' || !parsed.nonce) return null
+    const installationId = typeof parsed.installationId === 'string' && parsed.installationId.trim()
+      ? parsed.installationId.trim()
+      : null
+
+    return {
+      nonce: parsed.nonce,
+      ...(installationId ? { installationId } : {}),
+    } satisfies GitHubOAuthState
+  } catch {
+    return null
+  }
+}
+
+const githubAuthorizeUrl = (tier: AccessTier, state: GitHubOAuthState) => {
+  const { clientId } = getAppCredentials(tier)
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: callbackUrl(tier),
+    scope: 'read:user user:email',
+    state: encodeState(state),
+  })
+
+  return `https://github.com/login/oauth/authorize?${params}`
+}
+
 const githubInstallErrorCode = (error: unknown) =>
   error instanceof GitHubInstallationTokenError && error.statusCode === 404
     ? 'github-installation-mismatch'
@@ -62,22 +100,13 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Unknown access tier' })
     }
 
-    const { clientId } = getAppCredentials(tier)
-    const state = crypto.randomUUID()
-    const params = new URLSearchParams({
-      client_id: clientId,
-      redirect_uri: callbackUrl(tier),
-      scope: 'read:user user:email',
-      state,
-    })
-
-    return reply.redirect(`https://github.com/login/oauth/authorize?${params}`)
+    return reply.redirect(githubAuthorizeUrl(tier, { nonce: crypto.randomUUID() }))
   })
 
   // ── OAuth + installation callback, now tier-aware via the route path ──────
   app.get<{
     Params: { tier: string }
-    Querystring: { code?: string; error?: string; error_description?: string; installation_id?: string }
+    Querystring: { code?: string; error?: string; error_description?: string; installation_id?: string; state?: string }
   }>('/github/callback/:tier', async (request, reply) => {
     const { tier } = request.params
     if (!isValidTier(tier)) {
@@ -99,9 +128,10 @@ export async function authRoutes(app: FastifyInstance) {
       const token = request.cookies.devpulse_token
 
       if (!token) {
-        const redirectUrl = new URL(frontendUrl())
-        redirectUrl.searchParams.set('error', 'sign-in-required')
-        return reply.redirect(redirectUrl.toString())
+        return reply.redirect(githubAuthorizeUrl(tier, {
+          nonce: crypto.randomUUID(),
+          installationId: installationIdOnly,
+        }))
       }
 
       let payload: { sub: string }
@@ -171,7 +201,8 @@ export async function authRoutes(app: FastifyInstance) {
       primaryEmail?.email ??
       `${githubUser.id}+${githubUser.login}@users.noreply.github.com`
 
-    const installationId = request.query.installation_id?.trim() || null
+    const state = decodeState(request.query.state)
+    const installationId = request.query.installation_id?.trim() || state?.installationId || null
     let installationToken: Awaited<ReturnType<typeof exchangeInstallationToken>> | null = null
     let installationError: unknown = null
 

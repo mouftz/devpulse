@@ -1883,6 +1883,114 @@ h2 {
   gap: 10px;
 }
 
+.access-comparison {
+  margin-top: 14px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.access-comparison-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.access-comparison-header h3 {
+  margin: 4px 0 0;
+  font-size: 1.15rem;
+}
+
+.current-tier-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  color: #bdf7df;
+  border: 1px solid rgba(126, 224, 192, 0.24);
+  border-radius: 999px;
+  background: rgba(126, 224, 192, 0.11);
+  font-size: 0.84rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.access-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+
+.access-table-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.25fr) minmax(130px, 0.75fr) minmax(160px, 0.9fr);
+  align-items: center;
+  min-height: 48px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.access-table-row:first-child {
+  border-top: 0;
+}
+
+.access-table-row > span {
+  min-width: 0;
+  padding: 11px 12px;
+  overflow-wrap: anywhere;
+}
+
+.access-table-row > span:not(:first-child) {
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.access-table-head {
+  color: rgba(246, 247, 251, 0.92);
+  background: rgba(255, 255, 255, 0.055);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.access-cell {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 7px;
+  margin: 0 !important;
+  font-size: 0.86rem;
+  font-weight: 800;
+}
+
+.access-cell svg {
+  flex: 0 0 auto;
+}
+
+.access-cell.included {
+  color: #bdf7df;
+}
+
+.access-cell.excluded {
+  color: #ffb8c0;
+}
+
+.access-cell.partial {
+  color: #ffd079;
+}
+
+.access-upgrade-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 12px;
+  color: rgba(246, 247, 251, 0.66);
+}
+
 .settings-system {
   margin-top: 18px;
 }
@@ -2786,6 +2894,29 @@ h2 {
 
   .sync-failure-row button {
     justify-self: stretch;
+  }
+
+  .access-comparison-header,
+  .access-upgrade-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .current-tier-pill {
+    align-self: flex-start;
+  }
+
+  .access-table-row {
+    grid-template-columns: 1fr;
+  }
+
+  .access-table-row > span:not(:first-child) {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    border-left: 0;
+  }
+
+  .access-table-head {
+    display: none;
   }
 
   .trend-y-axis {

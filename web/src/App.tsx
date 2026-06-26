@@ -1805,6 +1805,48 @@ const connectGitHub = (tier: 'standard' | 'full') => {
               />
             </div>
 
+            <div className="access-comparison">
+              <div className="access-comparison-header">
+                <div>
+                  <p className="eyebrow">GitHub Access</p>
+                  <h3>Standard vs Full</h3>
+                </div>
+                <span className="current-tier-pill">
+                  Current: {user.accessTier === 'full' ? 'Full' : 'Standard'}
+                </span>
+              </div>
+              <div className="access-table" role="table" aria-label="GitHub access comparison">
+                <div className="access-table-row access-table-head" role="row">
+                  <span role="columnheader">Feature</span>
+                  <span role="columnheader">Standard</span>
+                  <span role="columnheader">Full</span>
+                </div>
+                {[
+                  ['Public repositories', true, true],
+                  ['Private repositories you select', false, true],
+                  ['Pull requests and reviews', true, true],
+                  ['Commit history and activity charts', false, true],
+                  ['Burnout and anomaly signals', 'Limited', true],
+                  ['Repository code access', false, 'Read-only metadata/code API'],
+                ].map(([feature, standard, full]) => (
+                  <div className="access-table-row" role="row" key={String(feature)}>
+                    <span role="cell">{feature}</span>
+                    <span role="cell">{formatAccessCell(standard)}</span>
+                    <span role="cell">{formatAccessCell(full)}</span>
+                  </div>
+                ))}
+              </div>
+              {user.accessTier !== 'full' ? (
+                <div className="access-upgrade-row">
+                  <span>Need private repos or commit analytics?</span>
+                  <button className="primary-button compact-button" onClick={() => connectGitHub('full')}>
+                    <Github size={16} />
+                    Switch to Full
+                  </button>
+                </div>
+              ) : null}
+            </div>
+
             {!user.giteaConnected && giteaFormOpen ? (
               <form className="gitea-connect-form" onSubmit={(event) => { event.preventDefault(); void connectGitea() }}>
                 <div>
@@ -2103,6 +2145,12 @@ function StatusTile({ label, value, detail }: { label: string; value: string; de
       <small>{detail}</small>
     </div>
   )
+}
+
+function formatAccessCell(value: boolean | string) {
+  if (value === true) return <span className="access-cell included"><CheckCircle2 size={16} /> Included</span>
+  if (value === false) return <span className="access-cell excluded"><X size={16} /> Not included</span>
+  return <span className="access-cell partial">{value}</span>
 }
 
 function ProviderSetting({

@@ -19,6 +19,7 @@ type AppCredentials = {
   webhookSecret: string
   clientId: string
   clientSecret: string
+  appSlug: string | undefined
 }
 
 const requiredEnv = (name: string) => {
@@ -40,6 +41,7 @@ const credentialsByTier: Record<AccessTier, () => AppCredentials> = {
     webhookSecret: requiredEnv('GITHUB_APP_WEBHOOK_SECRET'),
     clientId: requiredEnv('GITHUB_CLIENT_ID'),
     clientSecret: requiredEnv('GITHUB_CLIENT_SECRET'),
+    appSlug: process.env.GITHUB_APP_SLUG,
   }),
   full: () => ({
     appId: requiredEnv('GITHUB_APP_FULL_ID'),
@@ -47,6 +49,7 @@ const credentialsByTier: Record<AccessTier, () => AppCredentials> = {
     webhookSecret: requiredEnv('GITHUB_APP_FULL_WEBHOOK_SECRET'),
     clientId: requiredEnv('GITHUB_APP_FULL_CLIENT_ID'),
     clientSecret: requiredEnv('GITHUB_APP_FULL_CLIENT_SECRET'),
+    appSlug: process.env.GITHUB_APP_FULL_SLUG,
   }),
 }
 

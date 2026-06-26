@@ -49,15 +49,17 @@ const consumeRedirectSession = () => {
     if (connected && !bridgeAttempted) {
       url.searchParams.set('authBridge', '1')
       window.location.href = `${API_URL}/auth/session?returnTo=${encodeURIComponent(url.toString())}`
+      return true
     }
 
-    return
+    return false
   }
 
   localStorage.setItem(SESSION_STORAGE_KEY, session)
   url.searchParams.delete('session')
   url.searchParams.delete('authBridge')
   window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  return false
 }
 
 type User = {
@@ -511,7 +513,7 @@ export function App() {
   }
 
   useEffect(() => {
-    consumeRedirectSession()
+    if (consumeRedirectSession()) return
     void load()
   }, [rangeDays, analyticsScope])
 

@@ -86,6 +86,17 @@ const githubAuthorizeUrl = (tier: AccessTier, state: GitHubOAuthState) => {
   return `https://github.com/login/oauth/authorize?${params}`
 }
 
+const githubInstallUrl = (tier: AccessTier, state: GitHubOAuthState) => {
+  const { appSlug } = getAppCredentials(tier)
+  if (!appSlug) return githubAuthorizeUrl(tier, state)
+
+  const params = new URLSearchParams({
+    state: encodeState(state),
+  })
+
+  return `https://github.com/apps/${appSlug}/installations/new?${params}`
+}
+
 const githubInstallErrorCode = (error: unknown) =>
   error instanceof GitHubInstallationTokenError && error.statusCode === 404
     ? 'github-installation-mismatch'
@@ -116,7 +127,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Unknown access tier' })
     }
 
-    return reply.redirect(githubAuthorizeUrl(tier, { nonce: crypto.randomUUID() }))
+    return reply.redirect(githubInstallUrl(tier, { nonce: crypto.randomUUID() }))
   })
 
   // ── OAuth + installation callback, now tier-aware via the route path ──────

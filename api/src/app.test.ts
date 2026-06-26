@@ -117,6 +117,50 @@ test('GET /auth/session rejects missing cookie sessions through the frontend red
   }
 })
 
+test('GET /auth/github/:tier starts GitHub App installation when an app slug is configured', async () => {
+  const previousClientId = process.env.GITHUB_APP_FULL_CLIENT_ID
+  const previousClientSecret = process.env.GITHUB_APP_FULL_CLIENT_SECRET
+  const previousAppId = process.env.GITHUB_APP_FULL_ID
+  const previousPrivateKey = process.env.GITHUB_APP_FULL_PRIVATE_KEY
+  const previousWebhookSecret = process.env.GITHUB_APP_FULL_WEBHOOK_SECRET
+  const previousSlug = process.env.GITHUB_APP_FULL_SLUG
+
+  process.env.GITHUB_APP_FULL_CLIENT_ID = 'full-client-id'
+  process.env.GITHUB_APP_FULL_CLIENT_SECRET = 'full-client-secret'
+  process.env.GITHUB_APP_FULL_ID = '456'
+  process.env.GITHUB_APP_FULL_PRIVATE_KEY = 'private-key'
+  process.env.GITHUB_APP_FULL_WEBHOOK_SECRET = 'webhook-secret'
+  process.env.GITHUB_APP_FULL_SLUG = 'devpulse-full'
+
+  const app = createApp()
+  try {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/github/full',
+    })
+
+    assert.equal(response.statusCode, 302)
+    const redirect = new URL(String(response.headers.location))
+    assert.equal(redirect.origin, 'https://github.com')
+    assert.equal(redirect.pathname, '/apps/devpulse-full/installations/new')
+    assert.ok(redirect.searchParams.get('state'))
+  } finally {
+    if (previousClientId === undefined) delete process.env.GITHUB_APP_FULL_CLIENT_ID
+    else process.env.GITHUB_APP_FULL_CLIENT_ID = previousClientId
+    if (previousClientSecret === undefined) delete process.env.GITHUB_APP_FULL_CLIENT_SECRET
+    else process.env.GITHUB_APP_FULL_CLIENT_SECRET = previousClientSecret
+    if (previousAppId === undefined) delete process.env.GITHUB_APP_FULL_ID
+    else process.env.GITHUB_APP_FULL_ID = previousAppId
+    if (previousPrivateKey === undefined) delete process.env.GITHUB_APP_FULL_PRIVATE_KEY
+    else process.env.GITHUB_APP_FULL_PRIVATE_KEY = previousPrivateKey
+    if (previousWebhookSecret === undefined) delete process.env.GITHUB_APP_FULL_WEBHOOK_SECRET
+    else process.env.GITHUB_APP_FULL_WEBHOOK_SECRET = previousWebhookSecret
+    if (previousSlug === undefined) delete process.env.GITHUB_APP_FULL_SLUG
+    else process.env.GITHUB_APP_FULL_SLUG = previousSlug
+    await app.close()
+  }
+})
+
 test('GET /auth/github/callback/:tier continues install-only callbacks into OAuth when no session exists', async () => {
   const previousClientId = process.env.GITHUB_CLIENT_ID
   const previousClientSecret = process.env.GITHUB_CLIENT_SECRET

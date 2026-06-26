@@ -1408,9 +1408,7 @@ const connectGitHub = (tier: 'standard' | 'full') => {
                 <p>Connect GitHub App to populate the dashboard.</p>
                 <button
                   className="primary-button"
-                  onClick={() => {
-                    window.location.href = 'https://github.com/apps/devpulse-analytics/installations/new'
-                  }}
+                  onClick={() => connectGitHub('standard')}
                 >
                   <Github size={18} />
                   Connect GitHub App
@@ -1848,7 +1846,7 @@ const connectGitHub = (tier: 'standard' | 'full') => {
                   </div>
                 ))}
               </div>
-              {user.accessTier !== 'full' ? (
+              {!isGitHubTierConnected(user, 'full') ? (
                 <div className="access-upgrade-row">
                   <span>Need private repos or commit analytics?</span>
                   <button className="primary-button compact-button" onClick={() => connectGitHub('full')}>
@@ -2170,7 +2168,7 @@ function githubDisplayTier(user: User) {
   if (user.githubAppInstalled && (user.githubAppKind === 'standard' || user.githubAppKind === 'full')) {
     return user.githubAppKind
   }
-  return user.accessTier === 'full' ? 'full' : 'standard'
+  return 'standard'
 }
 
 function isGitHubTierConnected(user: User, tier: 'standard' | 'full') {

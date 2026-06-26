@@ -329,6 +329,7 @@ export async function authRoutes(app: FastifyInstance) {
           githubInstallationToken: true,
           githubInstallationTokenExpiresAt: true,
           accessTier: true,
+          githubAppKind: true,
         },
       })
 
@@ -347,6 +348,7 @@ export async function authRoutes(app: FastifyInstance) {
           githubConnected: Boolean(user.githubInstallationId || user.accessToken),
           githubAppInstalled: Boolean(user.githubInstallationId),
           accessTier: user.accessTier,
+          githubAppKind: user.githubAppKind,
           giteaConnected: Boolean(user.giteaUsername && user.giteaBaseUrl && user.giteaToken),
           giteaBaseUrl: user.giteaBaseUrl,
         },

@@ -73,6 +73,7 @@ type User = {
   githubConnected: boolean
   githubAppInstalled?: boolean
   accessTier?: 'standard' | 'full'
+  githubAppKind?: 'standard' | 'full' | null
   giteaConnected: boolean
 }
 
@@ -1784,14 +1785,25 @@ const connectGitHub = (tier: 'standard' | 'full') => {
 
             <div className="settings-list">
               <ProviderSetting
-                connected={user.githubConnected}
-                detail={user.githubConnected
-                  ? `${user.accessTier === 'full' ? 'Full access' : 'Standard access'} as ${user.username}${user.githubAppInstalled ? ' · GitHub App installed' : ' · OAuth only'}`
-                  : 'Disconnected. Reconnect with GitHub App.'}
+                connected={isGitHubTierConnected(user, 'standard')}
+                detail={isGitHubTierConnected(user, 'standard')
+                  ? `PR-only access as ${user.username}${user.githubAppInstalled ? ' · GitHub App installed' : ' · OAuth only'}`
+                  : 'PRs, reviews, and comments without commit or private repo access.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
-                name={`GitHub ${user.accessTier === 'full' ? 'Full' : 'Standard'}`}
+                name="GitHub Standard"
                 onConnect={() => connectGitHub('standard')}
+                onUnlink={() => void unlinkProvider('github')}
+              />
+              <ProviderSetting
+                connected={isGitHubTierConnected(user, 'full')}
+                detail={isGitHubTierConnected(user, 'full')
+                  ? `Private repos and commit analytics as ${user.username} · GitHub App installed`
+                  : 'Adds private repositories, commit history, activity charts, and stronger ML signals.'}
+                icon={<Github size={30} />}
+                isBusy={unlinkingProvider === 'github'}
+                name="GitHub Full"
+                onConnect={() => connectGitHub('full')}
                 onUnlink={() => void unlinkProvider('github')}
               />
               <ProviderSetting
@@ -1812,7 +1824,7 @@ const connectGitHub = (tier: 'standard' | 'full') => {
                   <h3>Standard vs Full</h3>
                 </div>
                 <span className="current-tier-pill">
-                  Current: {user.accessTier === 'full' ? 'Full' : 'Standard'}
+                  Current: {currentGitHubTierLabel(user)}
                 </span>
               </div>
               <div className="access-table" role="table" aria-label="GitHub access comparison">
@@ -2151,6 +2163,25 @@ function formatAccessCell(value: boolean | string) {
   if (value === true) return <span className="access-cell included"><CheckCircle2 size={16} /> Included</span>
   if (value === false) return <span className="access-cell excluded"><X size={16} /> Not included</span>
   return <span className="access-cell partial">{value}</span>
+}
+
+function githubDisplayTier(user: User) {
+  if (!user.githubConnected) return null
+  if (user.githubAppInstalled && (user.githubAppKind === 'standard' || user.githubAppKind === 'full')) {
+    return user.githubAppKind
+  }
+  return user.accessTier === 'full' ? 'full' : 'standard'
+}
+
+function isGitHubTierConnected(user: User, tier: 'standard' | 'full') {
+  return githubDisplayTier(user) === tier
+}
+
+function currentGitHubTierLabel(user: User) {
+  const tier = githubDisplayTier(user)
+  if (tier === 'full') return 'Full'
+  if (tier === 'standard') return 'Standard'
+  return 'None'
 }
 
 function ProviderSetting({

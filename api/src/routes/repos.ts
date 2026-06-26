@@ -418,7 +418,7 @@ export async function repoRoutes(app: FastifyInstance) {
       ? user.githubAppKind
       : user.accessTier
     const requiresInstallationRepos = githubAppKind === 'full'
-    const useInstallationRepos = requiresInstallationRepos || Boolean(user.githubInstallationId || user.githubInstallationToken)
+    const useInstallationRepos = Boolean(user.githubInstallationId || user.githubInstallationToken)
     const accessToken = await getGitHubAccessTokenForUser(user.id)
     const repoUrl = useInstallationRepos ? 'https://api.github.com/installation/repositories' : 'https://api.github.com/user/repos'
     const repoSearchParams = useInstallationRepos

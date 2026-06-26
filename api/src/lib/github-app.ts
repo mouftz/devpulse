@@ -113,8 +113,6 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
   const tier = (user.githubAppKind === 'standard' || user.githubAppKind === 'full'
     ? user.githubAppKind
     : user.accessTier ?? 'standard') as AccessTier
-  const requiresInstallationToken = tier === 'full'
-
   const tokenExpiresAt = user.githubInstallationTokenExpiresAt?.getTime() ?? 0
   const refreshThresholdMs = 5 * 60 * 1000
   if (user.githubInstallationToken && tokenExpiresAt > Date.now() + refreshThresholdMs) {
@@ -133,12 +131,8 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
       })
       return refreshed.token
     } catch (error) {
-      if (!user.accessToken || requiresInstallationToken) throw error
+      if (!user.accessToken) throw error
     }
-  }
-
-  if (requiresInstallationToken) {
-    throw new Error('Install the Full GitHub App before syncing private repositories')
   }
 
   if (user.accessToken) {

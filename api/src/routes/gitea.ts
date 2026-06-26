@@ -36,7 +36,8 @@ type GiteaCommit = {
 }
 
 type GiteaPullRequest = {
-  number: number
+  number?: number
+  index?: number
   title: string
   state: string
   merged?: boolean
@@ -127,6 +128,7 @@ const giteaMergedAt = (pullRequest: GiteaPullRequest) => {
 }
 
 const giteaState = (pullRequest: GiteaPullRequest) => (giteaMergedAt(pullRequest) ? 'merged' : pullRequest.state)
+const giteaPullRequestNumber = (pullRequest: GiteaPullRequest) => pullRequest.number ?? pullRequest.index ?? null
 
 const paginateGitea = async <T>(credentials: GiteaCredentials, path: string, searchParams: Record<string, string> = {}) => {
   const results: T[] = []
@@ -172,19 +174,22 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string; ownerI
       pullRequests,
       PROVIDER_REQUEST_CONCURRENCY,
       async (pullRequest) => {
+        const prNumber = giteaPullRequestNumber(pullRequest)
+        if (prNumber === null) return
+
         try {
           const [reviews, reviewComments, issueComments] = await Promise.all([
-            paginateGitea<GiteaReview>(credentials, `${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/reviews`),
-            paginateGitea<GiteaComment>(credentials, `${apiUrl}/repos/${owner}/${name}/pulls/${pullRequest.number}/comments`),
-            paginateGitea<GiteaComment>(credentials, `${apiUrl}/repos/${owner}/${name}/issues/${pullRequest.number}/comments`),
+            paginateGitea<GiteaReview>(credentials, `${apiUrl}/repos/${owner}/${name}/pulls/${prNumber}/reviews`),
+            paginateGitea<GiteaComment>(credentials, `${apiUrl}/repos/${owner}/${name}/pulls/${prNumber}/comments`),
+            paginateGitea<GiteaComment>(credentials, `${apiUrl}/repos/${owner}/${name}/issues/${prNumber}/comments`),
           ])
-          reviewsByPr.set(pullRequest.number, reviews)
-          reviewCommentsByPr.set(pullRequest.number, reviewComments)
-          issueCommentsByPr.set(pullRequest.number, issueComments)
+          reviewsByPr.set(prNumber, reviews)
+          reviewCommentsByPr.set(prNumber, reviewComments)
+          issueCommentsByPr.set(prNumber, issueComments)
         } catch {
-          reviewsByPr.set(pullRequest.number, [])
-          reviewCommentsByPr.set(pullRequest.number, [])
-          issueCommentsByPr.set(pullRequest.number, [])
+          reviewsByPr.set(prNumber, [])
+          reviewCommentsByPr.set(prNumber, [])
+          issueCommentsByPr.set(prNumber, [])
         }
       },
     )
@@ -211,17 +216,20 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string; ownerI
       )
 
       const savedPullRequests = await Promise.all(
-        pullRequests.map((pullRequest) =>
-          tx.pullRequest.upsert({
+        pullRequests.flatMap((pullRequest) => {
+          const prNumber = giteaPullRequestNumber(pullRequest)
+          if (prNumber === null) return []
+
+          return tx.pullRequest.upsert({
             where: {
               repoId_githubPrNumber: {
                 repoId: repo.id,
-                githubPrNumber: pullRequest.number,
+                githubPrNumber: prNumber,
               },
             },
             create: {
               repoId: repo.id,
-              githubPrNumber: pullRequest.number,
+              githubPrNumber: prNumber,
               title: pullRequest.title,
               state: giteaState(pullRequest),
               authorGithubId: giteaIdentity(pullRequest.user) ?? 'ghost',
@@ -237,14 +245,14 @@ export const syncGiteaRepo = async (repo: { id: string; fullName: string; ownerI
               ...(giteaMergedAt(pullRequest) ? { mergedAt: giteaMergedAt(pullRequest) } : {}),
               closedAt: pullRequest.closed_at ? new Date(pullRequest.closed_at) : null,
             },
-          }),
-        ),
+          })
+        }),
       )
 
       const savedReviews = await Promise.all(
         savedPullRequests.flatMap((savedPullRequest) => {
           const sourcePullRequest = pullRequests.find(
-            (pullRequest) => pullRequest.number === savedPullRequest.githubPrNumber,
+            (pullRequest) => giteaPullRequestNumber(pullRequest) === savedPullRequest.githubPrNumber,
           )
           const reviews = reviewsByPr.get(savedPullRequest.githubPrNumber) ?? []
 

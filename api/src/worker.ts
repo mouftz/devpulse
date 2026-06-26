@@ -27,7 +27,7 @@ const scheduleDueRepos = async (reason: 'nightly' | 'catchup') => {
 const processJob = async (job: SyncJob) => {
   const repo = await prisma.repo.findUnique({
     where: { id: job.repoId },
-    select: { id: true, fullName: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true, isHidden: true },
+    select: { id: true, fullName: true, provider: true, providerRepoId: true, githubRepoId: true, ownerId: true, isHidden: true, isPrivate: true },
   })
   if (!repo || repo.isHidden) {
     return
@@ -41,7 +41,7 @@ const processJob = async (job: SyncJob) => {
     if (!user) {
       throw new Error(`GitHub user missing for repo ${repo.fullName}`)
     }
-    await syncGitHubRepo(user, { id: repo.id, fullName: repo.fullName })
+    await syncGitHubRepo(user, { id: repo.id, fullName: repo.fullName, isPrivate: repo.isPrivate })
     log(`synced github repo ${repo.fullName}`)
     return
   }

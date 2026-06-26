@@ -45,7 +45,7 @@ export function AuthLanding({ onConnectGitHub }: AuthLandingProps) {
               >
                 <ShieldCheck size={22} />
                 <div>
-                  <strong>Standard — PR-only access</strong>
+                  <strong>STANDARD — PR-only access</strong>
                   <span>
                     Pull requests, reviews, and comments. DevPulse never requests access
                     to your repository code.
@@ -58,10 +58,11 @@ export function AuthLanding({ onConnectGitHub }: AuthLandingProps) {
               >
                 <Lock size={22} />
                 <div>
-                  <strong>Full — adds commit data</strong>
+                  <strong>FULL — private repos and commit data</strong>
                   <span>
                     Everything in Standard, plus commit frequency and timing for sharper
-                    burnout signals. Grants read-only repository access.
+                    burnout signals. Grants read-only repository access, including private
+                    repos you select during installation.
                   </span>
                 </div>
               </button>

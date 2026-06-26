@@ -170,12 +170,14 @@ const paginateGitHub = async <T>(url: string, accessToken: string, searchParams?
 
 export const syncGitHubRepo = async (
   user: GitHubSyncUser,
-  repo: { id: string; fullName: string },
+  repo: { id: string; fullName: string; isPrivate?: boolean },
 ) => {
   await markRepoSyncStarted(repo.id)
 
   try {
-    const accessToken = await getGitHubAccessTokenForUser(user.id)
+    const accessToken = await getGitHubAccessTokenForUser(user.id, {
+      requireInstallationToken: repo.isPrivate === true,
+    })
     const commits = await paginateGitHub<GitHubCommit>(
       `https://api.github.com/repos/${repo.fullName}/commits`,
       accessToken,
@@ -419,7 +421,9 @@ export async function repoRoutes(app: FastifyInstance) {
       : user.accessTier
     const requiresInstallationRepos = githubAppKind === 'full'
     const useInstallationRepos = Boolean(user.githubInstallationId || user.githubInstallationToken)
-    const accessToken = await getGitHubAccessTokenForUser(user.id)
+    const accessToken = await getGitHubAccessTokenForUser(user.id, {
+      requireInstallationToken: useInstallationRepos,
+    })
     const repoUrl = useInstallationRepos ? 'https://api.github.com/installation/repositories' : 'https://api.github.com/user/repos'
     const repoSearchParams = useInstallationRepos
       ? { per_page: '100' }
@@ -526,7 +530,7 @@ export async function repoRoutes(app: FastifyInstance) {
         isHidden: false,
         provider: 'github',
       },
-      select: { id: true, fullName: true },
+      select: { id: true, fullName: true, isPrivate: true },
       orderBy: { fullName: 'asc' },
     })
 
@@ -600,7 +604,7 @@ export async function repoRoutes(app: FastifyInstance) {
         ownerId: user.id,
         isHidden: false,
       },
-      select: { id: true, fullName: true },
+      select: { id: true, fullName: true, isPrivate: true },
     })
 
     if (!repo) {

@@ -93,7 +93,10 @@ export const storeInstallationToken = async (
   })
 }
 
-export const getGitHubAccessTokenForUser = async (userId: string) => {
+export const getGitHubAccessTokenForUser = async (
+  userId: string,
+  options: { requireInstallationToken?: boolean } = {},
+) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: {
@@ -131,8 +134,12 @@ export const getGitHubAccessTokenForUser = async (userId: string) => {
       })
       return refreshed.token
     } catch (error) {
-      if (!user.accessToken) throw error
+      if (options.requireInstallationToken || !user.accessToken) throw error
     }
+  }
+
+  if (options.requireInstallationToken) {
+    throw new Error('Install the matching GitHub App before syncing private repositories')
   }
 
   if (user.accessToken) {

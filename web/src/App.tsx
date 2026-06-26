@@ -71,6 +71,8 @@ type User = {
   email: string
   avatarUrl: string | null
   githubConnected: boolean
+  githubAppInstalled?: boolean
+  accessTier?: 'standard' | 'full'
   giteaConnected: boolean
 }
 
@@ -1783,10 +1785,12 @@ const connectGitHub = (tier: 'standard' | 'full') => {
             <div className="settings-list">
               <ProviderSetting
                 connected={user.githubConnected}
-                detail={user.githubConnected ? `Connected as ${user.username}` : 'Disconnected. Reconnect with GitHub App.'}
+                detail={user.githubConnected
+                  ? `${user.accessTier === 'full' ? 'Full access' : 'Standard access'} as ${user.username}${user.githubAppInstalled ? ' · GitHub App installed' : ' · OAuth only'}`
+                  : 'Disconnected. Reconnect with GitHub App.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
-                name="GitHub"
+                name={`GitHub ${user.accessTier === 'full' ? 'Full' : 'Standard'}`}
                 onConnect={() => connectGitHub('standard')}
                 onUnlink={() => void unlinkProvider('github')}
               />

@@ -1,4 +1,4 @@
-import { Activity, GitBranch, Github, Lock, ShieldCheck } from 'lucide-react'
+import { Activity, CheckCircle2, GitBranch, Github, Lock, ShieldCheck, X } from 'lucide-react'
 
 type AuthLandingProps = {
   onConnectGitHub: (tier: 'standard' | 'full') => void
@@ -66,6 +66,27 @@ export function AuthLanding({ onConnectGitHub }: AuthLandingProps) {
                   </span>
                 </div>
               </button>
+              <div className="auth-access-table" aria-label="Standard and Full access comparison">
+                <div className="auth-access-row auth-access-head">
+                  <span>Included</span>
+                  <span>Standard</span>
+                  <span>Full</span>
+                </div>
+                {[
+                  ['Public repos', true, true],
+                  ['Private repos selected during install', false, true],
+                  ['Pull requests and reviews', true, true],
+                  ['Commit history charts', false, true],
+                  ['Burnout and anomaly signals', 'Limited', true],
+                  ['Repository code permission', false, 'Read-only'],
+                ].map(([feature, standard, full]) => (
+                  <div className="auth-access-row" key={String(feature)}>
+                    <span>{feature}</span>
+                    <span>{renderAuthAccessCell(standard)}</span>
+                    <span>{renderAuthAccessCell(full)}</span>
+                  </div>
+                ))}
+              </div>
               <div className="auth-provider-card secondary-auth-card">
                 <GitBranch size={22} />
                 <div>
@@ -83,4 +104,10 @@ export function AuthLanding({ onConnectGitHub }: AuthLandingProps) {
       </section>
     </main>
   )
+}
+
+function renderAuthAccessCell(value: boolean | string) {
+  if (value === true) return <span className="auth-access-cell yes"><CheckCircle2 size={15} /> Yes</span>
+  if (value === false) return <span className="auth-access-cell no"><X size={15} /> No</span>
+  return <span className="auth-access-cell partial">{value}</span>
 }

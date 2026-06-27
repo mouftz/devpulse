@@ -375,6 +375,74 @@ button:disabled:hover {
   font-size: 0.92rem;
 }
 
+.auth-access-table {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(5, 10, 18, 0.22);
+}
+
+.auth-access-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.35fr) minmax(94px, 0.75fr) minmax(94px, 0.75fr);
+  align-items: center;
+  min-height: 42px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.auth-access-row:first-child {
+  border-top: 0;
+}
+
+.auth-access-row > span {
+  min-width: 0;
+  padding: 9px 11px;
+  color: rgba(246, 247, 251, 0.7);
+  font-size: 0.84rem;
+  overflow-wrap: anywhere;
+}
+
+.auth-access-row > span:not(:first-child) {
+  border-left: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.auth-access-head {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.auth-access-head > span {
+  color: rgba(246, 247, 251, 0.92);
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.auth-access-cell {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 6px;
+  margin: 0 !important;
+  font-weight: 800;
+}
+
+.auth-access-cell svg {
+  flex: 0 0 auto;
+}
+
+.auth-access-cell.yes {
+  color: #bdf7df;
+}
+
+.auth-access-cell.no {
+  color: #ffb8c0;
+}
+
+.auth-access-cell.partial {
+  color: #ffd079;
+}
+
 .primary-auth-card {
   cursor: pointer;
   transition:
@@ -2794,6 +2862,19 @@ h2 {
   .auth-hero {
     min-height: auto;
     overflow-y: visible;
+  }
+
+  .auth-access-row {
+    grid-template-columns: 1fr;
+  }
+
+  .auth-access-row > span:not(:first-child) {
+    border-top: 1px solid rgba(255, 255, 255, 0.09);
+    border-left: 0;
+  }
+
+  .auth-access-head {
+    display: none;
   }
 
   .hero {

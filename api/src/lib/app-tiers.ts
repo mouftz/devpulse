@@ -55,6 +55,9 @@ const credentialsByTier: Record<AccessTier, () => AppCredentials> = {
 
 export const getAppCredentials = (tier: AccessTier): AppCredentials => credentialsByTier[tier]()
 
+export const getAppSlug = (tier: AccessTier) =>
+  tier === 'standard' ? process.env.GITHUB_APP_SLUG : process.env.GITHUB_APP_FULL_SLUG
+
 // Feature flags derived purely from tier — used by the UI and the
 // feature extractor to know what's available without re-deriving logic
 // in multiple places.

@@ -125,11 +125,11 @@ test('GET /auth/github/:tier starts GitHub App installation when an app slug is 
   const previousWebhookSecret = process.env.GITHUB_APP_FULL_WEBHOOK_SECRET
   const previousSlug = process.env.GITHUB_APP_FULL_SLUG
 
-  process.env.GITHUB_APP_FULL_CLIENT_ID = 'full-client-id'
-  process.env.GITHUB_APP_FULL_CLIENT_SECRET = 'full-client-secret'
-  process.env.GITHUB_APP_FULL_ID = '456'
-  process.env.GITHUB_APP_FULL_PRIVATE_KEY = 'private-key'
-  process.env.GITHUB_APP_FULL_WEBHOOK_SECRET = 'webhook-secret'
+  delete process.env.GITHUB_APP_FULL_CLIENT_ID
+  delete process.env.GITHUB_APP_FULL_CLIENT_SECRET
+  delete process.env.GITHUB_APP_FULL_ID
+  delete process.env.GITHUB_APP_FULL_PRIVATE_KEY
+  delete process.env.GITHUB_APP_FULL_WEBHOOK_SECRET
   process.env.GITHUB_APP_FULL_SLUG = 'devpulse-full'
 
   const app = createApp()

@@ -10,7 +10,7 @@ import {
   storeUserInstallationTokenForTier,
   uninstallGitHubAppInstallation,
 } from '../lib/github-app.js'
-import { getAppCredentials, type AccessTier } from '../lib/app-tiers.js'
+import { getAppCredentials, getAppSlug, type AccessTier } from '../lib/app-tiers.js'
 
 type GitHubTokenResponse = {
   access_token: string
@@ -88,7 +88,7 @@ const githubAuthorizeUrl = (tier: AccessTier, state: GitHubOAuthState) => {
 }
 
 const githubInstallUrl = (tier: AccessTier, state: GitHubOAuthState) => {
-  const { appSlug } = getAppCredentials(tier)
+  const appSlug = getAppSlug(tier)
   if (!appSlug) return null
 
   const params = new URLSearchParams({

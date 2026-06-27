@@ -399,6 +399,12 @@ export async function repoRoutes(app: FastifyInstance) {
         githubInstallationToken: true,
         accessTier: true,
         githubAppKind: true,
+        githubInstallations: {
+          select: {
+            tier: true,
+            installationId: true,
+          },
+        },
       },
     })
 
@@ -417,13 +423,22 @@ export async function repoRoutes(app: FastifyInstance) {
     }
 
     const githubRepos: GitHubRepo[] = []
-    const githubAppKind = user.githubAppKind === 'standard' || user.githubAppKind === 'full'
-      ? user.githubAppKind
-      : user.accessTier
-    const requiresInstallationRepos = githubAppKind === 'full'
-    const useInstallationRepos = Boolean(user.githubInstallationId || user.githubInstallationToken)
+    const tableInstallations = user.githubInstallations?.filter(
+      (installation) => installation.tier === 'standard' || installation.tier === 'full',
+    ) ?? []
+    const fullInstallation = tableInstallations.some((installation) => installation.tier === 'full')
+    const installedTier = fullInstallation
+      ? 'full'
+      : tableInstallations[0]?.tier === 'standard'
+        ? 'standard'
+        : user.githubAppKind === 'standard' || user.githubAppKind === 'full'
+          ? user.githubAppKind
+          : null
+    const anyInstallation = Boolean(installedTier && (tableInstallations.length || user.githubInstallationId || user.githubInstallationToken))
+    const useInstallationRepos = fullInstallation || anyInstallation
     const accessToken = await getGitHubAccessTokenForUser(user.id, {
       requireInstallationToken: useInstallationRepos,
+      ...(installedTier ? { installationTier: installedTier as 'standard' | 'full' } : {}),
     })
     const repoUrl = useInstallationRepos ? 'https://api.github.com/installation/repositories' : 'https://api.github.com/user/repos'
     const repoSearchParams = useInstallationRepos
@@ -462,7 +477,7 @@ export async function repoRoutes(app: FastifyInstance) {
         githubRepos.push(repo)
       }
     } catch (error) {
-      if (!useInstallationRepos || requiresInstallationRepos) throw error
+      if (!useInstallationRepos || fullInstallation) throw error
 
       request.log.warn({ error }, 'GitHub installation repository listing failed; retrying OAuth repository listing')
       for await (const repo of got.paginate<GitHubRepo>('https://api.github.com/user/repos', {

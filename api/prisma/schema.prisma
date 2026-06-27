@@ -32,8 +32,26 @@ model User {
   teamMembers TeamMember[]
   mlScores    MlScore[]
   ownedTeams  Team[]   @relation("TeamOwner")
+  githubInstallations GitHubInstallation[]
 
   @@map("users")
+}
+
+model GitHubInstallation {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tier      String
+  installationId String @map("installation_id")
+  installationToken String @map("installation_token")
+  installationTokenExpiresAt DateTime @map("installation_token_expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tier])
+  @@unique([tier, installationId])
+  @@map("github_installations")
 }
 
 // ── Teams ──────────────────────────────────────────────────────────────────────

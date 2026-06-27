@@ -250,10 +250,12 @@ export async function authRoutes(app: FastifyInstance) {
     const installationId = request.query.installation_id?.trim() || state?.installationId || null
     let installationToken: Awaited<ReturnType<typeof exchangeInstallationToken>> | null = null
     let installationError: unknown = null
+    let installationConnected = false
 
     if (installationId) {
       try {
         installationToken = await exchangeInstallationToken(installationId, tier)
+        installationConnected = true
       } catch (error) {
         installationError = error
         request.log.warn({ error, installationId, tier }, 'GitHub App installation token exchange failed during login')
@@ -302,15 +304,48 @@ export async function authRoutes(app: FastifyInstance) {
       },
     })
 
+    if (installationId && installationToken) {
+      await prisma.gitHubInstallation.upsert({
+        where: {
+          userId_tier: {
+            userId: user.id,
+            tier,
+          },
+        },
+        create: {
+          userId: user.id,
+          tier,
+          installationId,
+          installationToken: encryptToken(installationToken.token),
+          installationTokenExpiresAt: new Date(installationToken.expires_at),
+        },
+        update: {
+          installationId,
+          installationToken: encryptToken(installationToken.token),
+          installationTokenExpiresAt: new Date(installationToken.expires_at),
+        },
+      })
+    }
+
     if (!installationToken) {
       try {
         const recoveredInstallation = await storeUserInstallationTokenForTier(user.id, tokenResponse.access_token, tier)
         if (recoveredInstallation) {
           installationError = null
+          installationConnected = true
         }
       } catch (error) {
         request.log.warn({ error, tier }, 'GitHub App installation lookup failed during login')
       }
+    }
+
+    if (installationError) {
+      await prisma.gitHubInstallation.deleteMany({
+        where: {
+          userId: user.id,
+          tier,
+        },
+      })
     }
 
     const token = app.jwt.sign({ sub: user.id, githubId: user.githubId })
@@ -327,8 +362,11 @@ export async function authRoutes(app: FastifyInstance) {
     if (installationError) {
       redirectUrl.searchParams.set('error', githubInstallErrorCode(installationError))
       redirectUrl.searchParams.set('tier', tier)
-    } else {
+    } else if (installationConnected) {
       redirectUrl.searchParams.set('connected', tier)
+    } else {
+      redirectUrl.searchParams.set('authorized', tier)
+      redirectUrl.searchParams.set('setup', 'github-install-required')
     }
     return reply.redirect(redirectUrl.toString())
   })
@@ -358,12 +396,29 @@ export async function authRoutes(app: FastifyInstance) {
           githubInstallationTokenExpiresAt: true,
           accessTier: true,
           githubAppKind: true,
+          githubInstallations: {
+            select: {
+              tier: true,
+              installationId: true,
+              installationTokenExpiresAt: true,
+            },
+          },
         },
       })
 
       if (!user) {
         return reply.code(401).send({ error: 'User not found' })
       }
+
+      const validInstallations = user.githubInstallations.filter(
+        (installation) => installation.tier === 'standard' || installation.tier === 'full',
+      )
+      const installedTiers = new Set(validInstallations.map((installation) => installation.tier))
+      const currentInstalledTier = installedTiers.has('full')
+        ? 'full'
+        : installedTiers.has('standard')
+          ? 'standard'
+          : user.githubAppKind
 
       return {
         user: {
@@ -373,10 +428,20 @@ export async function authRoutes(app: FastifyInstance) {
           giteaUsername: user.giteaUsername,
           email: user.email,
           avatarUrl: user.avatarUrl,
-          githubConnected: Boolean(user.githubInstallationId || user.accessToken),
-          githubAppInstalled: Boolean(user.githubInstallationId),
+          githubConnected: Boolean(validInstallations.length || user.accessToken),
+          githubAppInstalled: validInstallations.length > 0,
           accessTier: user.accessTier,
-          githubAppKind: user.githubAppKind,
+          githubAppKind: currentInstalledTier,
+          githubTiers: {
+            standard: {
+              installed: installedTiers.has('standard'),
+              authorized: installedTiers.has('standard') || Boolean(user.accessToken && user.accessTier === 'standard'),
+            },
+            full: {
+              installed: installedTiers.has('full'),
+              authorized: installedTiers.has('full') || Boolean(user.accessToken && user.accessTier === 'full'),
+            },
+          },
           giteaConnected: Boolean(user.giteaUsername && user.giteaBaseUrl && user.giteaToken),
           giteaBaseUrl: user.giteaBaseUrl,
         },
@@ -416,7 +481,17 @@ export async function authRoutes(app: FastifyInstance) {
 
       const existingUser = await prisma.user.findUnique({
         where: { id: payload.sub },
-        select: { githubInstallationId: true, accessTier: true, githubAppKind: true },
+        select: {
+          githubInstallationId: true,
+          accessTier: true,
+          githubAppKind: true,
+          githubInstallations: {
+            select: {
+              tier: true,
+              installationId: true,
+            },
+          },
+        },
       })
 
       await prisma.user.update({
@@ -428,8 +503,21 @@ export async function authRoutes(app: FastifyInstance) {
           githubInstallationTokenExpiresAt: null,
         },
       })
+      await prisma.gitHubInstallation.deleteMany({ where: { userId: payload.sub } })
 
-      if (existingUser?.githubInstallationId) {
+      const installationsToUninstall = existingUser?.githubInstallations.filter(
+        (installation) => installation.tier === 'standard' || installation.tier === 'full',
+      ) ?? []
+
+      if (installationsToUninstall.length) {
+        for (const installation of installationsToUninstall) {
+          try {
+            await uninstallGitHubAppInstallation(installation.installationId, installation.tier as AccessTier)
+          } catch (error) {
+            request.log.warn({ error }, 'Failed to uninstall GitHub App installation')
+          }
+        }
+      } else if (existingUser?.githubInstallationId) {
         try {
           const tier = (existingUser.githubAppKind === 'standard' || existingUser.githubAppKind === 'full'
             ? existingUser.githubAppKind

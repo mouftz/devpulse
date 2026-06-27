@@ -274,11 +274,15 @@ test('POST /auth/unlink/github clears the saved GitHub token', async () => {
   const app = createApp()
   const originalUserUpdate = prisma.user.update
   const originalUserFindUnique = prisma.user.findUnique
+  const originalGitHubInstallationDeleteMany = prisma.gitHubInstallation.deleteMany
   let updateArgs: unknown
+  let deleteManyArgs: unknown
 
   prisma.user.findUnique = (async () => ({
     githubInstallationId: null,
     accessTier: 'standard',
+    githubAppKind: null,
+    githubInstallations: [],
   })) as unknown as typeof prisma.user.findUnique
 
   prisma.user.update = (async (args: Parameters<typeof prisma.user.update>[0]) => {
@@ -287,6 +291,10 @@ test('POST /auth/unlink/github clears the saved GitHub token', async () => {
       id: 'user-1',
     }
   }) as unknown as typeof prisma.user.update
+  prisma.gitHubInstallation.deleteMany = (async (args: Parameters<typeof prisma.gitHubInstallation.deleteMany>[0]) => {
+    deleteManyArgs = args
+    return { count: 0 }
+  }) as unknown as typeof prisma.gitHubInstallation.deleteMany
 
   try {
     const response = await app.inject({
@@ -305,9 +313,11 @@ test('POST /auth/unlink/github clears the saved GitHub token', async () => {
         githubInstallationTokenExpiresAt: null,
       },
     })
+    assert.deepEqual(deleteManyArgs, { where: { userId: 'user-1' } })
   } finally {
     prisma.user.update = originalUserUpdate
     prisma.user.findUnique = originalUserFindUnique
+    prisma.gitHubInstallation.deleteMany = originalGitHubInstallationDeleteMany
     await app.close()
   }
 })

@@ -76,6 +76,14 @@ const authRedirectMessage = (error: string, tier: string | null) => {
   return `GitHub setup failed: ${error}`
 }
 
+const authSetupMessage = (setup: string, tier: string | null) => {
+  const tierLabel = tier === 'full' ? 'Full' : tier === 'standard' ? 'Standard' : 'GitHub'
+  if (setup === 'github-install-required') {
+    return `${tierLabel} GitHub authorization worked, but no repositories were selected yet. Finish setup to choose repos on GitHub.`
+  }
+  return `${tierLabel} setup still needs attention.`
+}
+
 type User = {
   id: string
   githubId: string
@@ -88,6 +96,10 @@ type User = {
   githubAppInstalled?: boolean
   accessTier?: 'standard' | 'full'
   githubAppKind?: 'standard' | 'full' | null
+  githubTiers?: {
+    standard: { authorized: boolean; installed: boolean }
+    full: { authorized: boolean; installed: boolean }
+  }
   giteaConnected: boolean
 }
 
@@ -540,6 +552,14 @@ export function App() {
       setNotice({ message: authRedirectMessage(setupError, url.searchParams.get('tier')), tone: 'error' })
       url.searchParams.delete('error')
       url.searchParams.delete('tier')
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+    }
+
+    const setupState = url.searchParams.get('setup')
+    if (setupState) {
+      setNotice({ message: authSetupMessage(setupState, url.searchParams.get('authorized')), tone: 'info' })
+      url.searchParams.delete('setup')
+      url.searchParams.delete('authorized')
       window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
     }
 
@@ -2194,6 +2214,10 @@ function formatAccessCell(value: boolean | string) {
 }
 
 function githubDisplayTier(user: User) {
+  if (user.githubTiers?.full.installed) return 'full'
+  if (user.githubTiers?.standard.installed) return 'standard'
+  if (user.githubTiers?.full.authorized) return 'full'
+  if (user.githubTiers?.standard.authorized) return 'standard'
   if (user.githubAppInstalled && (user.githubAppKind === 'standard' || user.githubAppKind === 'full')) {
     return user.githubAppKind
   }
@@ -2204,11 +2228,13 @@ function githubDisplayTier(user: User) {
 }
 
 function isGitHubTierConnected(user: User, tier: 'standard' | 'full') {
+  if (user.githubTiers) return user.githubTiers[tier].installed
   return user.githubAppInstalled && user.githubAppKind === tier
 }
 
 function githubTierStatus(user: User, tier: 'standard' | 'full'): ConnectionStatus {
   if (isGitHubTierConnected(user, tier)) return 'connected'
+  if (user.githubTiers?.[tier].authorized) return 'authorized'
   if (user.githubConnected && user.accessTier === tier) return 'authorized'
   return 'disconnected'
 }

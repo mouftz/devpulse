@@ -81,21 +81,54 @@ export const storeInstallationToken = async (
   tier: AccessTier,
 ) => {
   const installationToken = await exchangeInstallationToken(installationId, tier)
-  return prisma.user.update({
-    where: { id: userId },
-    data: {
-      githubInstallationId: installationId,
-      githubInstallationToken: encryptToken(installationToken.token),
-      githubInstallationTokenExpiresAt: new Date(installationToken.expires_at),
-      githubAppKind: tier,
-      accessTier: tier,
+  const encryptedToken = encryptToken(installationToken.token)
+  const expiresAt = new Date(installationToken.expires_at)
+
+  await prisma.$transaction([
+    prisma.gitHubInstallation.upsert({
+      where: {
+        userId_tier: {
+          userId,
+          tier,
+        },
+      },
+      create: {
+        userId,
+        tier,
+        installationId,
+        installationToken: encryptedToken,
+        installationTokenExpiresAt: expiresAt,
+      },
+      update: {
+        installationId,
+        installationToken: encryptedToken,
+        installationTokenExpiresAt: expiresAt,
+      },
+    }),
+    prisma.user.update({
+      where: { id: userId },
+      data: {
+        githubInstallationId: installationId,
+        githubInstallationToken: encryptedToken,
+        githubInstallationTokenExpiresAt: expiresAt,
+        githubAppKind: tier,
+        accessTier: tier,
+      },
+    }),
+  ])
+
+  return prisma.gitHubInstallation.findUnique({
+    where: {
+      userId_tier: {
+        userId,
+        tier,
+      },
     },
     select: {
-      githubInstallationId: true,
-      githubInstallationToken: true,
-      githubInstallationTokenExpiresAt: true,
-      accessTier: true,
-      githubAppKind: true,
+      installationId: true,
+      installationToken: true,
+      installationTokenExpiresAt: true,
+      tier: true,
     },
   })
 }
@@ -138,6 +171,14 @@ export const getGitHubAccessTokenForUser = async (
       githubInstallationTokenExpiresAt: true,
       accessTier: true,
       githubAppKind: true,
+      githubInstallations: {
+        select: {
+          tier: true,
+          installationId: true,
+          installationToken: true,
+          installationTokenExpiresAt: true,
+        },
+      },
     },
   })
 
@@ -149,30 +190,60 @@ export const getGitHubAccessTokenForUser = async (
     ? user.githubAppKind
     : user.accessTier ?? 'standard') as AccessTier
   const tier = options.installationTier ?? storedTier
+  const tierInstallation = user.githubInstallations.find((installation) => installation.tier === tier)
   const storedInstallationTier = user.githubAppKind === 'standard' || user.githubAppKind === 'full'
     ? user.githubAppKind
     : null
-  const hasMatchingStoredInstallation = Boolean(
-    user.githubInstallationId &&
-    user.githubInstallationToken &&
-    storedInstallationTier === tier,
-  )
-  const tokenExpiresAt = user.githubInstallationTokenExpiresAt?.getTime() ?? 0
+  const fallbackInstallation = !tierInstallation && storedInstallationTier === tier && user.githubInstallationId && user.githubInstallationToken
+    ? {
+        tier,
+        installationId: user.githubInstallationId,
+        installationToken: user.githubInstallationToken,
+        installationTokenExpiresAt: user.githubInstallationTokenExpiresAt,
+      }
+    : null
+  const installation = tierInstallation ?? fallbackInstallation
+  const tokenExpiresAt = installation?.installationTokenExpiresAt?.getTime() ?? 0
   const refreshThresholdMs = 5 * 60 * 1000
-  if (hasMatchingStoredInstallation && user.githubInstallationToken && tokenExpiresAt > Date.now() + refreshThresholdMs) {
-    return decryptToken(user.githubInstallationToken)
+  if (installation?.installationToken && tokenExpiresAt > Date.now() + refreshThresholdMs) {
+    return decryptToken(installation.installationToken)
   }
 
-  if (user.githubInstallationId && storedInstallationTier === tier) {
+  if (installation?.installationId) {
     try {
-      const refreshed = await exchangeInstallationToken(user.githubInstallationId, tier)
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          githubInstallationToken: encryptToken(refreshed.token),
-          githubInstallationTokenExpiresAt: new Date(refreshed.expires_at),
-        },
-      })
+      const refreshed = await exchangeInstallationToken(installation.installationId, tier)
+      const encryptedToken = encryptToken(refreshed.token)
+      const expiresAt = new Date(refreshed.expires_at)
+      await prisma.$transaction([
+        prisma.gitHubInstallation.upsert({
+          where: {
+            userId_tier: {
+              userId,
+              tier,
+            },
+          },
+          create: {
+            userId,
+            tier,
+            installationId: installation.installationId,
+            installationToken: encryptedToken,
+            installationTokenExpiresAt: expiresAt,
+          },
+          update: {
+            installationToken: encryptedToken,
+            installationTokenExpiresAt: expiresAt,
+          },
+        }),
+        prisma.user.update({
+          where: { id: userId },
+          data: {
+            githubInstallationId: installation.installationId,
+            githubInstallationToken: encryptedToken,
+            githubInstallationTokenExpiresAt: expiresAt,
+            githubAppKind: tier,
+          },
+        }),
+      ])
       return refreshed.token
     } catch (error) {
       if (options.requireInstallationToken || !user.accessToken) throw error
@@ -183,8 +254,8 @@ export const getGitHubAccessTokenForUser = async (
     if (user.accessToken) {
       const accessToken = decryptToken(user.accessToken)
       const stored = await storeUserInstallationTokenForTier(userId, accessToken, tier)
-      if (stored?.githubInstallationToken) {
-        return decryptToken(stored.githubInstallationToken)
+      if (stored?.installationToken) {
+        return decryptToken(stored.installationToken)
       }
     }
 

@@ -10,6 +10,13 @@ type InstallationAccessTokenResponse = {
   expires_at: string
 }
 
+type UserInstallationsResponse = {
+  installations: Array<{
+    id: number
+    app_id: number
+  }>
+}
+
 const githubHeaders = {
   Accept: 'application/vnd.github+json',
   'X-GitHub-Api-Version': '2022-11-28',
@@ -93,6 +100,21 @@ export const storeInstallationToken = async (
   })
 }
 
+const findUserInstallationForTier = async (accessToken: string, tier: AccessTier) => {
+  const { appId } = getAppCredentials(tier)
+  const installations = await got
+    .get('https://api.github.com/user/installations', {
+      headers: {
+        ...githubHeaders,
+        Authorization: `Bearer ${accessToken}`,
+      },
+      searchParams: { per_page: '100' },
+    })
+    .json<UserInstallationsResponse>()
+
+  return installations.installations.find((installation) => String(installation.app_id) === String(appId))
+}
+
 export const getGitHubAccessTokenForUser = async (
   userId: string,
   options: { requireInstallationToken?: boolean } = {},
@@ -139,6 +161,17 @@ export const getGitHubAccessTokenForUser = async (
   }
 
   if (options.requireInstallationToken) {
+    if (user.accessToken) {
+      const accessToken = decryptToken(user.accessToken)
+      const installation = await findUserInstallationForTier(accessToken, tier)
+      if (installation) {
+        const stored = await storeInstallationToken(userId, String(installation.id), tier)
+        if (stored.githubInstallationToken) {
+          return decryptToken(stored.githubInstallationToken)
+        }
+      }
+    }
+
     throw new Error('Install the matching GitHub App before syncing private repositories')
   }
 

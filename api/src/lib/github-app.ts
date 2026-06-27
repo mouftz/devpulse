@@ -188,7 +188,7 @@ export const getGitHubAccessTokenForUser = async (
       }
     }
 
-    throw new Error('Install the matching GitHub App before syncing private repositories')
+    throw new Error('Finish Full setup and select this repository in GitHub before syncing private repositories')
   }
 
   if (user.accessToken) {

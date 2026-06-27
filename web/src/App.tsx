@@ -62,6 +62,20 @@ const consumeRedirectSession = () => {
   return false
 }
 
+const authRedirectMessage = (error: string, tier: string | null) => {
+  const tierLabel = tier === 'full' ? 'Full' : tier === 'standard' ? 'Standard' : 'GitHub'
+  if (error === 'github-app-slug-missing') {
+    return `${tierLabel} GitHub App setup is missing its app slug on the server, so DevPulse cannot open GitHub's repository selection page yet.`
+  }
+  if (error === 'github-installation-mismatch') {
+    return `${tierLabel} GitHub App installation does not match this DevPulse connection. Reinstall the matching GitHub App and select repositories.`
+  }
+  if (error === 'github-installation-token-failed') {
+    return `${tierLabel} GitHub App installation could not be verified. Try the setup flow again and select repositories on GitHub.`
+  }
+  return `GitHub setup failed: ${error}`
+}
+
 type User = {
   id: string
   githubId: string
@@ -519,6 +533,16 @@ export function App() {
 
   useEffect(() => {
     if (consumeRedirectSession()) return
+
+    const url = new URL(window.location.href)
+    const setupError = url.searchParams.get('error')
+    if (setupError) {
+      setNotice({ message: authRedirectMessage(setupError, url.searchParams.get('tier')), tone: 'error' })
+      url.searchParams.delete('error')
+      url.searchParams.delete('tier')
+      window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+    }
+
     void load()
   }, [rangeDays, analyticsScope])
 
@@ -1789,7 +1813,7 @@ const connectGitHub = (tier: 'standard' | 'full') => {
                 detail={githubTierStatus(user, 'standard') === 'connected'
                   ? `PR-only GitHub App installed as ${user.username}`
                   : githubTierStatus(user, 'standard') === 'authorized'
-                    ? 'Authorized, but not installed on repositories. Finish setup to track PRs without commit or private repo access.'
+                    ? 'Authorized with GitHub, but no repositories were selected yet. Select repos on GitHub to track PRs without commit or private repo access.'
                     : 'PRs, reviews, and comments without commit or private repo access.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
@@ -1802,7 +1826,7 @@ const connectGitHub = (tier: 'standard' | 'full') => {
                 detail={githubTierStatus(user, 'full') === 'connected'
                   ? `Private repos and commit analytics as ${user.username} · GitHub App installed`
                   : githubTierStatus(user, 'full') === 'authorized'
-                    ? 'Authorized as Full, but repository installation is missing. Finish setup and select repos on GitHub.'
+                    ? 'Authorized with GitHub, but no Full repositories were selected yet. Select repos on GitHub to unlock private repos and commit analytics.'
                   : 'Install Full and select repositories on GitHub to unlock private repos, commit history, activity charts, and stronger ML signals.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
@@ -1854,10 +1878,10 @@ const connectGitHub = (tier: 'standard' | 'full') => {
               </div>
               {!isGitHubTierConnected(user, 'full') ? (
                 <div className="access-upgrade-row">
-                  <span>Need private repos or commit analytics?</span>
+                  <span>{githubTierStatus(user, 'full') === 'authorized' ? 'Full still needs repository selection.' : 'Need private repos or commit analytics?'}</span>
                   <button className="primary-button compact-button" onClick={() => connectGitHub('full')}>
                     <Github size={16} />
-                    Switch to Full
+                    {githubTierStatus(user, 'full') === 'authorized' ? 'Select Full repos' : 'Switch to Full'}
                   </button>
                 </div>
               ) : null}
@@ -2191,8 +2215,8 @@ function githubTierStatus(user: User, tier: 'standard' | 'full'): ConnectionStat
 
 function currentGitHubTierLabel(user: User) {
   const tier = githubDisplayTier(user)
-  if (tier === 'full') return 'Full'
-  if (tier === 'standard') return 'Standard'
+  if (tier === 'full') return isGitHubTierConnected(user, 'full') ? 'Full' : 'Full setup needed'
+  if (tier === 'standard') return isGitHubTierConnected(user, 'standard') ? 'Standard' : 'Standard setup needed'
   return 'None'
 }
 
@@ -2215,7 +2239,7 @@ function ProviderSetting({
 }) {
   const connected = status === 'connected'
   const authorized = status === 'authorized'
-  const statusLabel = connected ? 'Connected' : authorized ? 'Authorized' : 'Disconnected'
+  const statusLabel = connected ? 'Connected' : authorized ? 'Needs repos' : 'Disconnected'
 
   return (
     <div className="settings-row">
@@ -2238,7 +2262,7 @@ function ProviderSetting({
         ) : (
           <button className="secondary-button compact-button" onClick={onConnect} disabled={isBusy}>
             {isBusy ? <Loader2 className="spin" size={16} /> : null}
-            {isBusy ? 'Connecting' : authorized ? 'Finish setup' : 'Connect'}
+            {isBusy ? 'Connecting' : authorized ? 'Select repos' : 'Connect'}
           </button>
         )}
       </div>

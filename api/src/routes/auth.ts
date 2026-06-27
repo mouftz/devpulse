@@ -1,4 +1,4 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import got from 'got'
 import prisma from '../db.js'
 import { encryptToken } from '../lib/token-crypto.js'
@@ -89,13 +89,24 @@ const githubAuthorizeUrl = (tier: AccessTier, state: GitHubOAuthState) => {
 
 const githubInstallUrl = (tier: AccessTier, state: GitHubOAuthState) => {
   const { appSlug } = getAppCredentials(tier)
-  if (!appSlug) return githubAuthorizeUrl(tier, state)
+  if (!appSlug) return null
 
   const params = new URLSearchParams({
     state: encodeState(state),
   })
 
   return `https://github.com/apps/${appSlug}/installations/new?${params}`
+}
+
+const redirectGitHubSetupError = (
+  reply: FastifyReply,
+  tier: AccessTier,
+  error: string,
+) => {
+  const redirectUrl = new URL(frontendUrl())
+  redirectUrl.searchParams.set('error', error)
+  redirectUrl.searchParams.set('tier', tier)
+  return reply.redirect(redirectUrl.toString())
 }
 
 const githubInstallErrorCode = (error: unknown) =>
@@ -128,7 +139,12 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Unknown access tier' })
     }
 
-    return reply.redirect(githubInstallUrl(tier, { nonce: crypto.randomUUID() }))
+    const installUrl = githubInstallUrl(tier, { nonce: crypto.randomUUID() })
+    if (!installUrl) {
+      return redirectGitHubSetupError(reply, tier, 'github-app-slug-missing')
+    }
+
+    return reply.redirect(installUrl)
   })
 
   // ── OAuth + installation callback, now tier-aware via the route path ──────

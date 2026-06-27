@@ -1785,8 +1785,10 @@ const connectGitHub = (tier: 'standard' | 'full') => {
               <ProviderSetting
                 connected={isGitHubTierConnected(user, 'standard')}
                 detail={isGitHubTierConnected(user, 'standard')
-                  ? `PR-only access as ${user.username}${user.githubAppInstalled ? ' · GitHub App installed' : ' · OAuth only'}`
-                  : 'PRs, reviews, and comments without commit or private repo access.'}
+                  ? `PR-only GitHub App installed as ${user.username}`
+                  : user.githubConnected
+                    ? 'Not installed for this account. Install Standard to track PRs without commit or private repo access.'
+                    : 'PRs, reviews, and comments without commit or private repo access.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
                 name="GitHub Standard"
@@ -1797,7 +1799,7 @@ const connectGitHub = (tier: 'standard' | 'full') => {
                 connected={isGitHubTierConnected(user, 'full')}
                 detail={isGitHubTierConnected(user, 'full')
                   ? `Private repos and commit analytics as ${user.username} · GitHub App installed`
-                  : 'Adds private repositories, commit history, activity charts, and stronger ML signals.'}
+                  : 'Install Full and select repositories on GitHub to unlock private repos, commit history, activity charts, and stronger ML signals.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
                 name="GitHub Full"
@@ -2164,11 +2166,10 @@ function formatAccessCell(value: boolean | string) {
 }
 
 function githubDisplayTier(user: User) {
-  if (!user.githubConnected) return null
   if (user.githubAppInstalled && (user.githubAppKind === 'standard' || user.githubAppKind === 'full')) {
     return user.githubAppKind
   }
-  return 'standard'
+  return null
 }
 
 function isGitHubTierConnected(user: User, tier: 'standard' | 'full') {

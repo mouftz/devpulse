@@ -117,7 +117,7 @@ const findUserInstallationForTier = async (accessToken: string, tier: AccessTier
 
 export const getGitHubAccessTokenForUser = async (
   userId: string,
-  options: { requireInstallationToken?: boolean } = {},
+  options: { requireInstallationToken?: boolean; installationTier?: AccessTier } = {},
 ) => {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -135,9 +135,10 @@ export const getGitHubAccessTokenForUser = async (
     throw new Error('User not found')
   }
 
-  const tier = (user.githubAppKind === 'standard' || user.githubAppKind === 'full'
+  const storedTier = (user.githubAppKind === 'standard' || user.githubAppKind === 'full'
     ? user.githubAppKind
     : user.accessTier ?? 'standard') as AccessTier
+  const tier = options.installationTier ?? storedTier
   const tokenExpiresAt = user.githubInstallationTokenExpiresAt?.getTime() ?? 0
   const refreshThresholdMs = 5 * 60 * 1000
   if (user.githubInstallationToken && tokenExpiresAt > Date.now() + refreshThresholdMs) {

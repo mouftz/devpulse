@@ -177,6 +177,7 @@ export const syncGitHubRepo = async (
   try {
     const accessToken = await getGitHubAccessTokenForUser(user.id, {
       requireInstallationToken: repo.isPrivate === true,
+      ...(repo.isPrivate === true ? { installationTier: 'full' as const } : {}),
     })
     const commits = await paginateGitHub<GitHubCommit>(
       `https://api.github.com/repos/${repo.fullName}/commits`,

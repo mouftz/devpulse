@@ -118,6 +118,29 @@ test('GET /auth/session rejects missing cookie sessions through the frontend red
 })
 
 test('GET /auth/github/:tier starts GitHub App installation when an app slug is configured', async () => {
+  const previousSlug = process.env.GITHUB_APP_SLUG
+  process.env.GITHUB_APP_SLUG = 'devpulse-analytics-standard'
+
+  const app = createApp()
+  try {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/auth/github/standard',
+    })
+
+    assert.equal(response.statusCode, 302)
+    const redirect = new URL(String(response.headers.location))
+    assert.equal(redirect.origin, 'https://github.com')
+    assert.equal(redirect.pathname, '/apps/devpulse-analytics-standard/installations/new')
+    assert.ok(redirect.searchParams.get('state'))
+  } finally {
+    if (previousSlug === undefined) delete process.env.GITHUB_APP_SLUG
+    else process.env.GITHUB_APP_SLUG = previousSlug
+    await app.close()
+  }
+})
+
+test('GET /auth/github/:tier starts Full GitHub App installation when a full app slug is configured', async () => {
   const previousClientId = process.env.GITHUB_APP_FULL_CLIENT_ID
   const previousClientSecret = process.env.GITHUB_APP_FULL_CLIENT_SECRET
   const previousAppId = process.env.GITHUB_APP_FULL_ID
@@ -211,12 +234,14 @@ test('GET /auth/github/callback/:tier continues install-only callbacks into OAut
   const previousAppId = process.env.GITHUB_APP_ID
   const previousPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY
   const previousWebhookSecret = process.env.GITHUB_APP_WEBHOOK_SECRET
+  const previousCallbackUrl = process.env.GITHUB_CALLBACK_URL
 
   process.env.GITHUB_CLIENT_ID = 'client-id'
   process.env.GITHUB_CLIENT_SECRET = 'client-secret'
   process.env.GITHUB_APP_ID = '123'
   process.env.GITHUB_APP_PRIVATE_KEY = 'private-key'
   process.env.GITHUB_APP_WEBHOOK_SECRET = 'webhook-secret'
+  process.env.GITHUB_CALLBACK_URL = 'https://api.example.com/auth/github/callback'
 
   const app = createApp()
   try {
@@ -230,7 +255,7 @@ test('GET /auth/github/callback/:tier continues install-only callbacks into OAut
     assert.match(location, /^https:\/\/github\.com\/login\/oauth\/authorize\?/)
     const redirect = new URL(location)
     assert.equal(redirect.searchParams.get('client_id'), 'client-id')
-    assert.equal(redirect.searchParams.get('redirect_uri'), 'http://localhost:3000/auth/github/callback/standard')
+    assert.equal(redirect.searchParams.get('redirect_uri'), 'https://api.example.com/auth/github/callback/standard')
     const state = redirect.searchParams.get('state')
     assert.ok(state)
     const decoded = JSON.parse(Buffer.from(state, 'base64url').toString('utf8')) as { installationId?: string }
@@ -246,6 +271,8 @@ test('GET /auth/github/callback/:tier continues install-only callbacks into OAut
     else process.env.GITHUB_APP_PRIVATE_KEY = previousPrivateKey
     if (previousWebhookSecret === undefined) delete process.env.GITHUB_APP_WEBHOOK_SECRET
     else process.env.GITHUB_APP_WEBHOOK_SECRET = previousWebhookSecret
+    if (previousCallbackUrl === undefined) delete process.env.GITHUB_CALLBACK_URL
+    else process.env.GITHUB_CALLBACK_URL = previousCallbackUrl
     await app.close()
   }
 })

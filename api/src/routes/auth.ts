@@ -44,10 +44,17 @@ const requiredEnv = (name: string) => {
   return value
 }
 
-const callbackUrl = (tier: AccessTier) =>
-  process.env.NODE_ENV === 'production'
-    ? `https://devpulse-api-naye.onrender.com/auth/github/callback/${tier}`
-    : `http://localhost:3000/auth/github/callback/${tier}`
+const callbackUrl = (tier: AccessTier) => {
+  const configured = process.env.GITHUB_CALLBACK_URL?.trim()
+  const fallback = process.env.NODE_ENV === 'production'
+    ? 'https://devpulse-api.onrender.com/auth/github/callback'
+    : 'http://localhost:3000/auth/github/callback'
+  const base = configured || fallback
+
+  if (base.endsWith(`/auth/github/callback/${tier}`)) return base
+  if (base.endsWith('/auth/github/callback')) return `${base}/${tier}`
+  return new URL(`/auth/github/callback/${tier}`, base).toString()
+}
 
 const frontendUrl = () => process.env.FRONTEND_URL ?? 'http://localhost:5173'
 

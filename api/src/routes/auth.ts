@@ -7,6 +7,7 @@ import {
   exchangeInstallationToken,
   GitHubInstallationTokenError,
   storeInstallationToken,
+  storeUserInstallationTokenForTier,
   uninstallGitHubAppInstallation,
 } from '../lib/github-app.js'
 import { getAppCredentials, type AccessTier } from '../lib/app-tiers.js'
@@ -266,13 +267,13 @@ export async function authRoutes(app: FastifyInstance) {
         username: githubUser.login,
         avatarUrl: githubUser.avatar_url,
         accessToken: encryptToken(tokenResponse.access_token),
+        accessTier: tier,
         ...(installationId && installationToken
           ? {
               githubInstallationId: installationId,
               githubInstallationToken: encryptToken(installationToken.token),
               githubInstallationTokenExpiresAt: new Date(installationToken.expires_at),
               githubAppKind: tier,
-              accessTier: tier,
             }
           : installationError
             ? {
@@ -284,6 +285,17 @@ export async function authRoutes(app: FastifyInstance) {
           : {}),
       },
     })
+
+    if (!installationToken) {
+      try {
+        const recoveredInstallation = await storeUserInstallationTokenForTier(user.id, tokenResponse.access_token, tier)
+        if (recoveredInstallation) {
+          installationError = null
+        }
+      } catch (error) {
+        request.log.warn({ error, tier }, 'GitHub App installation lookup failed during login')
+      }
+    }
 
     const token = app.jwt.sign({ sub: user.id, githubId: user.githubId })
     console.log('COOKIE DEBUG', { nodeEnv: process.env.NODE_ENV, frontendUrl: frontendUrl() })

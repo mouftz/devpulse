@@ -115,6 +115,16 @@ const findUserInstallationForTier = async (accessToken: string, tier: AccessTier
   return installations.installations.find((installation) => String(installation.app_id) === String(appId))
 }
 
+export const storeUserInstallationTokenForTier = async (
+  userId: string,
+  accessToken: string,
+  tier: AccessTier,
+) => {
+  const installation = await findUserInstallationForTier(accessToken, tier)
+  if (!installation) return null
+  return storeInstallationToken(userId, String(installation.id), tier)
+}
+
 export const getGitHubAccessTokenForUser = async (
   userId: string,
   options: { requireInstallationToken?: boolean; installationTier?: AccessTier } = {},
@@ -139,13 +149,21 @@ export const getGitHubAccessTokenForUser = async (
     ? user.githubAppKind
     : user.accessTier ?? 'standard') as AccessTier
   const tier = options.installationTier ?? storedTier
+  const storedInstallationTier = user.githubAppKind === 'standard' || user.githubAppKind === 'full'
+    ? user.githubAppKind
+    : null
+  const hasMatchingStoredInstallation = Boolean(
+    user.githubInstallationId &&
+    user.githubInstallationToken &&
+    storedInstallationTier === tier,
+  )
   const tokenExpiresAt = user.githubInstallationTokenExpiresAt?.getTime() ?? 0
   const refreshThresholdMs = 5 * 60 * 1000
-  if (user.githubInstallationToken && tokenExpiresAt > Date.now() + refreshThresholdMs) {
+  if (hasMatchingStoredInstallation && user.githubInstallationToken && tokenExpiresAt > Date.now() + refreshThresholdMs) {
     return decryptToken(user.githubInstallationToken)
   }
 
-  if (user.githubInstallationId) {
+  if (user.githubInstallationId && storedInstallationTier === tier) {
     try {
       const refreshed = await exchangeInstallationToken(user.githubInstallationId, tier)
       await prisma.user.update({
@@ -164,12 +182,9 @@ export const getGitHubAccessTokenForUser = async (
   if (options.requireInstallationToken) {
     if (user.accessToken) {
       const accessToken = decryptToken(user.accessToken)
-      const installation = await findUserInstallationForTier(accessToken, tier)
-      if (installation) {
-        const stored = await storeInstallationToken(userId, String(installation.id), tier)
-        if (stored.githubInstallationToken) {
-          return decryptToken(stored.githubInstallationToken)
-        }
+      const stored = await storeUserInstallationTokenForTier(userId, accessToken, tier)
+      if (stored?.githubInstallationToken) {
+        return decryptToken(stored.githubInstallationToken)
       }
     }
 

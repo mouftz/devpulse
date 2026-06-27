@@ -1897,8 +1897,10 @@ h2 {
   inset: 0;
   z-index: 20;
   display: grid;
-  place-items: center;
+  place-items: start center;
   padding: 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: rgba(2, 6, 12, 0.62);
   backdrop-filter: blur(18px);
 }
@@ -1912,7 +1914,10 @@ h2 {
 
 .settings-panel {
   width: min(760px, 100%);
+  max-height: calc(100dvh - 44px);
   padding: 22px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .settings-account {
@@ -2581,6 +2586,12 @@ h2 {
   color: #bdf7df;
   background: rgba(126, 224, 192, 0.12);
   border: 1px solid rgba(126, 224, 192, 0.2);
+}
+
+.connection-pill.authorized {
+  color: #ffd079;
+  background: rgba(255, 208, 121, 0.1);
+  border: 1px solid rgba(255, 208, 121, 0.22);
 }
 
 .connection-pill.disconnected {

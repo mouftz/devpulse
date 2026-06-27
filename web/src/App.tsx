@@ -77,6 +77,8 @@ type User = {
   giteaConnected: boolean
 }
 
+type ConnectionStatus = 'connected' | 'authorized' | 'disconnected'
+
 type Overview = {
   totals: {
     repos: number
@@ -1783,11 +1785,11 @@ const connectGitHub = (tier: 'standard' | 'full') => {
 
             <div className="settings-list">
               <ProviderSetting
-                connected={isGitHubTierConnected(user, 'standard')}
-                detail={isGitHubTierConnected(user, 'standard')
+                status={githubTierStatus(user, 'standard')}
+                detail={githubTierStatus(user, 'standard') === 'connected'
                   ? `PR-only GitHub App installed as ${user.username}`
-                  : user.githubConnected
-                    ? 'Not installed for this account. Install Standard to track PRs without commit or private repo access.'
+                  : githubTierStatus(user, 'standard') === 'authorized'
+                    ? 'Authorized, but not installed on repositories. Finish setup to track PRs without commit or private repo access.'
                     : 'PRs, reviews, and comments without commit or private repo access.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
@@ -1796,9 +1798,11 @@ const connectGitHub = (tier: 'standard' | 'full') => {
                 onUnlink={() => void unlinkProvider('github')}
               />
               <ProviderSetting
-                connected={isGitHubTierConnected(user, 'full')}
-                detail={isGitHubTierConnected(user, 'full')
+                status={githubTierStatus(user, 'full')}
+                detail={githubTierStatus(user, 'full') === 'connected'
                   ? `Private repos and commit analytics as ${user.username} · GitHub App installed`
+                  : githubTierStatus(user, 'full') === 'authorized'
+                    ? 'Authorized as Full, but repository installation is missing. Finish setup and select repos on GitHub.'
                   : 'Install Full and select repositories on GitHub to unlock private repos, commit history, activity charts, and stronger ML signals.'}
                 icon={<Github size={30} />}
                 isBusy={unlinkingProvider === 'github'}
@@ -1807,7 +1811,7 @@ const connectGitHub = (tier: 'standard' | 'full') => {
                 onUnlink={() => void unlinkProvider('github')}
               />
               <ProviderSetting
-                connected={user.giteaConnected}
+                status={user.giteaConnected ? 'connected' : 'disconnected'}
                 detail={user.giteaConnected ? `Connected as ${user.giteaUsername}` : 'Connect any Gitea server with your own access token.'}
                 icon={<GitBranch size={20} />}
                 isBusy={unlinkingProvider === 'gitea' || connectingProvider === 'gitea'}
@@ -2169,11 +2173,20 @@ function githubDisplayTier(user: User) {
   if (user.githubAppInstalled && (user.githubAppKind === 'standard' || user.githubAppKind === 'full')) {
     return user.githubAppKind
   }
+  if (user.githubConnected && (user.accessTier === 'standard' || user.accessTier === 'full')) {
+    return user.accessTier
+  }
   return null
 }
 
 function isGitHubTierConnected(user: User, tier: 'standard' | 'full') {
-  return githubDisplayTier(user) === tier
+  return user.githubAppInstalled && user.githubAppKind === tier
+}
+
+function githubTierStatus(user: User, tier: 'standard' | 'full'): ConnectionStatus {
+  if (isGitHubTierConnected(user, tier)) return 'connected'
+  if (user.githubConnected && user.accessTier === tier) return 'authorized'
+  return 'disconnected'
 }
 
 function currentGitHubTierLabel(user: User) {
@@ -2184,22 +2197,26 @@ function currentGitHubTierLabel(user: User) {
 }
 
 function ProviderSetting({
-  connected,
   detail,
   icon,
   isBusy,
   name,
   onConnect,
   onUnlink,
+  status,
 }: {
-  connected: boolean
   detail: string
   icon: React.ReactNode
   isBusy: boolean
   name: string
   onConnect: () => void
   onUnlink: () => void
+  status: ConnectionStatus
 }) {
+  const connected = status === 'connected'
+  const authorized = status === 'authorized'
+  const statusLabel = connected ? 'Connected' : authorized ? 'Authorized' : 'Disconnected'
+
   return (
     <div className="settings-row">
       <div className="settings-provider">
@@ -2210,8 +2227,8 @@ function ProviderSetting({
         </div>
       </div>
       <div className="settings-row-actions">
-        <span className={`connection-pill ${connected ? 'connected' : 'disconnected'}`}>
-          {connected ? 'Connected' : 'Disconnected'}
+        <span className={`connection-pill ${status}`}>
+          {statusLabel}
         </span>
         {connected ? (
           <button className="danger-button compact-button" onClick={onUnlink} disabled={isBusy}>
@@ -2221,7 +2238,7 @@ function ProviderSetting({
         ) : (
           <button className="secondary-button compact-button" onClick={onConnect} disabled={isBusy}>
             {isBusy ? <Loader2 className="spin" size={16} /> : null}
-            {isBusy ? 'Connecting' : 'Connect'}
+            {isBusy ? 'Connecting' : authorized ? 'Finish setup' : 'Connect'}
           </button>
         )}
       </div>

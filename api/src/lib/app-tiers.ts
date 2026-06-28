@@ -30,6 +30,34 @@ const requiredEnv = (name: string) => {
 
 const normalizeKey = (raw: string) => raw.replace(/\\n/g, '\n').trim()
 
+export const normalizeAppSlug = (raw?: string | null) => {
+  const value = raw?.trim()
+  if (!value) return undefined
+
+  try {
+    const url = new URL(value)
+    const appSlug = url.pathname.match(/^\/apps\/([^/]+)/)?.[1]
+    if (appSlug) return appSlug
+  } catch {
+    // Plain slugs and GitHub App display names are handled below.
+  }
+
+  return value
+    .toLowerCase()
+    .replace(/['’]/g, '')
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || undefined
+}
+
+const appSlugForTier = (tier: AccessTier, raw?: string | null) => {
+  const slug = normalizeAppSlug(raw)
+  if (tier === 'standard' && slug === 'devpulse-analytics') {
+    return 'devpulse-analytics-standard'
+  }
+  return slug
+}
+
 // NOTE: "standard" reuses the ORIGINAL unprefixed env vars (the app that
 // already existed before the two-tier split). Only "full" got new,
 // explicitly suffixed vars when it was added. This avoids a rename of
@@ -41,7 +69,7 @@ const credentialsByTier: Record<AccessTier, () => AppCredentials> = {
     webhookSecret: requiredEnv('GITHUB_APP_WEBHOOK_SECRET'),
     clientId: requiredEnv('GITHUB_CLIENT_ID'),
     clientSecret: requiredEnv('GITHUB_CLIENT_SECRET'),
-    appSlug: process.env.GITHUB_APP_SLUG,
+    appSlug: appSlugForTier('standard', process.env.GITHUB_APP_SLUG),
   }),
   full: () => ({
     appId: requiredEnv('GITHUB_APP_FULL_ID'),
@@ -49,14 +77,14 @@ const credentialsByTier: Record<AccessTier, () => AppCredentials> = {
     webhookSecret: requiredEnv('GITHUB_APP_FULL_WEBHOOK_SECRET'),
     clientId: requiredEnv('GITHUB_APP_FULL_CLIENT_ID'),
     clientSecret: requiredEnv('GITHUB_APP_FULL_CLIENT_SECRET'),
-    appSlug: process.env.GITHUB_APP_FULL_SLUG,
+    appSlug: normalizeAppSlug(process.env.GITHUB_APP_FULL_SLUG),
   }),
 }
 
 export const getAppCredentials = (tier: AccessTier): AppCredentials => credentialsByTier[tier]()
 
 export const getAppSlug = (tier: AccessTier) =>
-  tier === 'standard' ? process.env.GITHUB_APP_SLUG : process.env.GITHUB_APP_FULL_SLUG
+  appSlugForTier(tier, tier === 'standard' ? process.env.GITHUB_APP_SLUG : process.env.GITHUB_APP_FULL_SLUG)
 
 // Feature flags derived purely from tier — used by the UI and the
 // feature extractor to know what's available without re-deriving logic

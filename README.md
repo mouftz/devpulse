@@ -2,18 +2,18 @@
 
 DevPulse is a full-stack engineering analytics workspace for GitHub and Gitea.
 It ingests repository activity into PostgreSQL, processes sync work through a
-Redis-backed worker, and turns commits, pull requests, reviews, and sync health
-into repository-level trends and recommended actions. A separate FastAPI ML
-service estimates merge time for open pull requests and records versioned
-predictions with confidence ranges.
+Redis-backed worker, and turns commits, pull requests, reviews, sync health,
+and team delivery signals into repository-level trends and recommended actions.
+A separate FastAPI ML service estimates merge time for open pull requests and
+records versioned predictions with confidence ranges.
 
 The current version is focused on one clean loop:
 
-1. Connect GitHub with your GitHub App install.
+1. Connect GitHub through either the Standard or Full GitHub App flow.
 2. Optionally connect any Gitea server from Settings.
 3. Discover repositories.
 4. Sync them in the background through Redis.
-5. Explore trends, forecasts, and recommended actions in the dashboard.
+5. Explore trends, forecasts, recommended actions, and supervisor views in the dashboard.
 
 ## Why DevPulse
 
@@ -24,7 +24,7 @@ recommendation to the repository and evidence that produced it.
 
 ## What Works Today
 
-- GitHub App sign-in with an HTTP-only session cookie
+- GitHub App sign-in with tiered Standard / Full access and an HTTP-only session cookie
 - Per-user Gitea connections for any compatible server, with encrypted access-token storage
 - Supervisor team workspaces with explicit shared-repository assignment and role-based membership
 - Team-only delivery totals for commits, pull requests, merges, and reviews without exposing personal repos
@@ -56,6 +56,7 @@ recommendation to the repository and evidence that produced it.
 - Time-ordered Random Forest evaluation with a median-baseline safety fallback
 - Versioned prediction history with confidence ranges and feature snapshots
 - Automatic post-sync inference and scheduled model retraining
+- Render deployment config for API, web, and ML services
 - Production Docker Compose, container health checks, and GitHub Actions CI
 - AES-256-GCM encryption for newly stored GitHub provider tokens
 
@@ -126,6 +127,16 @@ the baseline, avoiding a misleading model trained on too little data.
 
 ## Local Setup
 
+### Requirements
+
+- Node.js `20+`
+- Docker Desktop
+- Python `3.11` or `3.12` for `ml-service`
+
+Python `3.14` is not supported by the pinned ML stack in
+`ml-service/requirements.txt`. If you use the system's newest Python, `numpy`,
+`pandas`, and `scikit-learn` may fail to install.
+
 ### 1. Install dependencies
 
 ```bash
@@ -180,6 +191,9 @@ HOST=127.0.0.1
 ```
 
 Do not commit real secrets.
+
+You can also use [api/.env.example](/Users/mouftz/Downloads/Personal%20Projects/Devpulse/api/.env.example)
+as a reference when running the API outside Docker.
 
 ### 3. Start Postgres and Redis
 
@@ -237,11 +251,13 @@ http://localhost:5173
 
 ```bash
 cd ml-service
-python3 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn api.main:app --host 127.0.0.1 --port 8001
 ```
+
+If `python3.12` is not available on your machine, use `python3.11`.
 
 Train the model manually after syncing merged pull requests:
 
@@ -252,18 +268,71 @@ curl -X POST http://localhost:8001/train/pr-cycle
 The background worker also retrains on startup and on the configured training
 interval.
 
-## GitHub App Setup
+## GitHub Setup
 
-Create a GitHub App and use this callback URL for the web sign-in flow:
+DevPulse supports two GitHub App tiers:
+
+- `Standard`: public repos, PRs, reviews, and comments
+- `Full`: everything in Standard plus commit history, activity analytics, and
+  private repos you explicitly select during GitHub App installation
+
+For local development and Render deployment, configure:
+
+- `GITHUB_APP_ID`
+- `GITHUB_APP_PRIVATE_KEY`
+- `GITHUB_APP_SLUG`
+- `GITHUB_APP_WEBHOOK_SECRET`
+- `GITHUB_APP_FULL_CLIENT_ID`
+- `GITHUB_APP_FULL_CLIENT_SECRET`
+- `GITHUB_APP_FULL_ID`
+- `GITHUB_APP_FULL_PRIVATE_KEY`
+- `GITHUB_APP_FULL_SLUG`
+- `GITHUB_APP_FULL_WEBHOOK_SECRET`
+- `GITHUB_CALLBACK_URL`
+
+The callback URL for local web sign-in is:
 
 ```text
 http://localhost:3000/auth/github/callback
 ```
 
-Put the GitHub App client ID and client secret in the root `.env`, plus the App
-ID and private key for installation-token signing. After login, the API stores
-the GitHub user token, installation metadata, signs a `devpulse_token` cookie,
-and redirects back to the frontend.
+After login, the API stores the GitHub access token, GitHub App installation
+metadata, signs a `devpulse_token` cookie, and redirects back to the frontend.
+
+If Full access is connected but private repos still do not sync, the usual
+cause is GitHub App installation scope: the Full app must be installed and the
+private repository must be selected during the installation flow.
+
+## Deployment
+
+The repo includes [render.yaml](/Users/mouftz/Downloads/Personal%20Projects/Devpulse/render.yaml)
+for a free-tier Render setup with three services:
+
+- `devpulse-web`: static React frontend
+- `devpulse-api`: Fastify API
+- `devpulse-ml`: FastAPI ML service
+
+The API can run its background worker inside the same Render service with:
+
+```env
+RUN_WORKER_IN_API=true
+```
+
+Render also expects:
+
+- `DATABASE_URL`
+- `DATABASE_URL_UNPOOLED`
+- `REDIS_URL`
+- `UPSTASH_REDIS_REST_URL`
+- `UPSTASH_REDIS_REST_TOKEN`
+- `ML_SERVICE_URL`
+- `ML_SERVICE_TOKEN`
+- `JWT_SECRET`
+- `TOKEN_ENCRYPTION_KEY`
+- `FRONTEND_URL`
+
+After provisioning Postgres, run Prisma migrations against the deployed API
+database before first use.
 
 ## Helpful Commands
 
@@ -283,6 +352,13 @@ cd web
 npm run dev
 npm run build
 npm test
+```
+
+### ML service
+
+```bash
+cd ml-service
+.venv/bin/python -m unittest discover -s tests
 ```
 
 ## Main API Routes
@@ -333,7 +409,7 @@ devpulse/
 
 Current test coverage includes:
 
-- 45 API route, queue, retry, provider, sync, and encryption tests
+- 56 API route, queue, retry, provider, sync, and encryption tests
 - 7 frontend filtering, comparison, queue-copy, and sync-health tests
 - Python tests for PR-cycle model training and prediction behavior
 
@@ -352,4 +428,5 @@ cd ml-service && python -m unittest discover -s tests
   access tokens. Existing plaintext local tokens remain readable for migration.
 - Generate a token key with `openssl rand -base64 32`.
 - `.DS_Store` is ignored and should stay untracked.
-- This is still a work in progress.
+- The ML service should be run with Python `3.11` or `3.12`.
+- This is a portfolio-ready v1, but not a fully hardened multi-tenant production SaaS.
